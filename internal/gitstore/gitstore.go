@@ -16,8 +16,12 @@ import (
 	"time"
 )
 
-// killDelay is how long a cancelled git has to exit before it is killed.
-const killDelay = 3 * time.Second
+// A cancelled git gets finishGrace to finish, then SIGTERM, then SIGKILL
+// killDelay later. git can leave lock files behind when signalled.
+const (
+	finishGrace = 2 * time.Second
+	killDelay   = 3 * time.Second
+)
 
 // BotName and BotEmail identify the author and committer of snapshot commits.
 const (
@@ -248,9 +252,11 @@ func unlisted(paths []string, list string) []string {
 
 func (r *Repo) git(ctx context.Context, stdin string, env []string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
-	// SIGKILL would leave git's lock files, such as .git/shallow.lock, behind.
-	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
-	cmd.WaitDelay = killDelay
+	cmd.Cancel = func() error {
+		time.AfterFunc(finishGrace, func() { _ = cmd.Process.Signal(syscall.SIGTERM) })
+		return nil
+	}
+	cmd.WaitDelay = finishGrace + killDelay
 	cmd.Dir = r.Dir
 	cmd.Env = append(append(os.Environ(), "LC_ALL=C", "GIT_TERMINAL_PROMPT=0"), env...)
 	cmd.Stdin = strings.NewReader(stdin)

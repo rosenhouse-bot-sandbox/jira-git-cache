@@ -703,6 +703,17 @@ func cancelWhenStarted(t *testing.T, started string) time.Duration {
 	return time.Since(begin)
 }
 
+func TestCancelLetsGitFinishFirst(t *testing.T) {
+	terminated := filepath.Join(t.TempDir(), "terminated")
+	started := stubGit(t, fmt.Sprintf("trap 'touch %q' TERM\nsleep 0.5", terminated))
+
+	cancelWhenStarted(t, started)
+
+	if _, err := os.Stat(terminated); err == nil {
+		t.Error("git was signalled before it could finish")
+	}
+}
+
 func TestCancelLetsGitCleanUp(t *testing.T) {
 	cleaned := filepath.Join(t.TempDir(), "cleaned")
 	started := stubGit(t, fmt.Sprintf("trap 'touch %q; exit 143' TERM\nwhile :; do sleep 0.01; done", cleaned))
