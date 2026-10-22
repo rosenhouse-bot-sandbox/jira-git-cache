@@ -36,10 +36,10 @@ var (
 
 // APIError is any non-2xx response that is not ErrUnauthenticated.
 type APIError struct {
-	Method, Path string // Path without query
+	Method, Path string // Path excludes the query.
 	StatusCode   int
-	Messages     []string          // errorMessages
-	FieldErrors  map[string]string // errors
+	Messages     []string
+	FieldErrors  map[string]string
 }
 
 func (e *APIError) Error() string {
@@ -55,11 +55,11 @@ func (e *APIError) Error() string {
 
 // Client calls the Jira REST API v2 with a personal access token.
 type Client struct {
-	BaseURL     string                                     // e.g. https://jira.example.com (may include a context path; no trailing slash)
-	Token       string                                     // surrounding whitespace is trimmed before use
-	HTTP        *http.Client                               // nil → http.DefaultClient
-	Sleep       func(context.Context, time.Duration) error // nil → timer that returns ctx.Err() if ctx ends first
-	MaxAttempts int                                        // 0 → 5
+	BaseURL     string                                     // It may include a context path but no trailing slash.
+	Token       string                                     // Surrounding whitespace is trimmed before use.
+	HTTP        *http.Client                               // Nil means http.DefaultClient.
+	Sleep       func(context.Context, time.Duration) error // Nil means a timer that returns ctx.Err() if ctx ends first.
+	MaxAttempts int                                        // Zero means 5.
 }
 
 // Myself returns the token's user.
@@ -175,7 +175,7 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 	backoff := time.Second
 	for attempt := 1; ; attempt++ {
 		retry, wait, err := c.try(ctx, path, q, out)
-		if !retry {
+		if !retry || attempts <= 1 {
 			return err
 		}
 		if attempt >= attempts {
@@ -185,8 +185,8 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 			wait = backoff
 		}
 		backoff = min(2*backoff, maxBackoff)
-		if err := sleep(ctx, wait); err != nil {
-			return fmt.Errorf("GET %s: %w", path, err)
+		if sleepErr := sleep(ctx, wait); sleepErr != nil {
+			return fmt.Errorf("%w; stopped retrying: %w", err, sleepErr)
 		}
 	}
 }
@@ -234,7 +234,7 @@ func (c *Client) try(ctx context.Context, path string, q url.Values, out any) (r
 // retryAfter reads Retry-After as integer seconds, capped at maxRetryAfter. It returns 0 for anything else.
 func retryAfter(h http.Header) time.Duration {
 	secs, err := strconv.Atoi(h.Get("Retry-After"))
-	if err != nil {
+	if err != nil && !errors.Is(err, strconv.ErrRange) {
 		return 0
 	}
 	return time.Duration(min(max(secs, 0), int(maxRetryAfter/time.Second))) * time.Second

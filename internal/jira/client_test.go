@@ -98,14 +98,19 @@ func TestMyselfSendsTokenAndAcceptHeader(t *testing.T) {
 
 func TestBaseURLMayHaveAContextPath(t *testing.T) {
 	s := jiramock.New(t)
+	var paths []string
 	c := &jira.Client{BaseURL: s.URL + "/jira", Token: s.Token, HTTP: &http.Client{Transport: roundTripper(
 		func(r *http.Request) (*http.Response, error) {
+			paths = append(paths, r.URL.Path)
 			r.URL.Path = strings.TrimPrefix(r.URL.Path, "/jira")
 			return http.DefaultTransport.RoundTrip(r)
 		})}}
 
 	if _, err := c.Myself(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+	if want := []string{"/jira/rest/api/2/myself"}; !slices.Equal(paths, want) {
+		t.Errorf("paths = %v, want %v", paths, want)
 	}
 }
 
@@ -544,6 +549,8 @@ func TestRetryAfter(t *testing.T) {
 		"60":                            60 * time.Second,
 		"61":                            60 * time.Second,
 		"99999999999999999":             60 * time.Second,
+		"99999999999999999999":          60 * time.Second,
+		"-99999999999999999999":         time.Second,
 	} {
 		s := jiramock.New(t)
 		f := jiramock.Fault{Status: http.StatusTooManyRequests, Times: 1}
@@ -562,8 +569,53 @@ func TestRetryAfter(t *testing.T) {
 	}
 }
 
+func TestRetryAfterZeroOrNegativeUsesBackoff(t *testing.T) {
+	for _, header := range []string{"0", "-3"} {
+		s := jiramock.New(t)
+		s.Inject(jiramock.Fault{Status: http.StatusServiceUnavailable, Header: http.Header{"Retry-After": {header}}, Times: 3})
+		c, sl := newClient(s)
+
+		if _, err := c.Myself(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}; !slices.Equal(sl.slept, want) {
+			t.Errorf("Retry-After %q: slept %v, want %v", header, sl.slept, want)
+		}
+	}
+}
+
+func TestRetryAfterOverridesLaterBackoff(t *testing.T) {
+	s := jiramock.New(t)
+	s.Inject(jiramock.Fault{Status: http.StatusServiceUnavailable, Times: 2})
+	s.Inject(jiramock.Fault{Status: http.StatusTooManyRequests, Header: http.Header{"Retry-After": {"1"}}, Times: 1})
+	c, sl := newClient(s)
+
+	if _, err := c.Myself(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if want := []time.Duration{time.Second, 2 * time.Second, time.Second}; !slices.Equal(sl.slept, want) {
+		t.Errorf("slept %v, want %v", sl.slept, want)
+	}
+}
+
+func TestBackoffAdvancesWhileRetryAfterIsUsed(t *testing.T) {
+	s := jiramock.New(t)
+	s.Inject(jiramock.Fault{Status: http.StatusTooManyRequests, Header: http.Header{"Retry-After": {"5"}}, Times: 1})
+	s.Inject(jiramock.Fault{Status: http.StatusServiceUnavailable, Times: 1})
+	c, sl := newClient(s)
+
+	if _, err := c.Myself(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if want := []time.Duration{5 * time.Second, 2 * time.Second}; !slices.Equal(sl.slept, want) {
+		t.Errorf("slept %v, want %v", sl.slept, want)
+	}
+}
+
 func TestRetriesOnlyRateLimitsAndServerErrors(t *testing.T) {
-	for status, retried := range map[int]bool{429: true, 500: true, 503: true, 499: false, 404: false, 400: false} {
+	for status, retried := range map[int]bool{
+		429: true, 500: true, 502: true, 503: true, 504: true, 599: true, 499: false, 404: false, 400: false,
+	} {
 		s := jiramock.New(t)
 		s.Inject(jiramock.Fault{Status: status, Times: 1})
 		c, _ := newClient(s)
@@ -604,6 +656,19 @@ func TestBackoffDoublesUpToCap(t *testing.T) {
 	}
 }
 
+func TestSingleAttemptErrorIsNotWrapped(t *testing.T) {
+	s := jiramock.New(t)
+	s.Inject(jiramock.Fault{Status: http.StatusServiceUnavailable})
+	c, _ := newClient(s)
+	c.MaxAttempts = 1
+
+	_, err := c.Myself(t.Context())
+
+	if want := "GET /rest/api/2/myself: 503: Service Unavailable"; err == nil || err.Error() != want {
+		t.Errorf("err = %v, want %q", err, want)
+	}
+}
+
 func TestDefaultMaxAttemptsIsFive(t *testing.T) {
 	s := jiramock.New(t)
 	s.Inject(jiramock.Fault{Status: http.StatusInternalServerError})
@@ -626,6 +691,10 @@ func TestSleepErrorStopsRetries(t *testing.T) {
 
 	if !errors.Is(err, context.Canceled) || len(s.Requests()) != 1 {
 		t.Errorf("err = %v after %d requests", err, len(s.Requests()))
+	}
+	wantAPIError(t, err, http.StatusServiceUnavailable)
+	if want := "GET /rest/api/2/myself: 503: Service Unavailable; stopped retrying: context canceled"; err.Error() != want {
+		t.Errorf("err = %q, want %q", err, want)
 	}
 }
 
@@ -726,6 +795,65 @@ func TestRetriesTruncatedBody(t *testing.T) {
 	}
 	if len(sl.slept) != 1 {
 		t.Errorf("slept %v", sl.slept)
+	}
+}
+
+type failingBody struct{}
+
+func (failingBody) Read([]byte) (int, error) { return 0, errors.New("boom") }
+func (failingBody) Close() error             { return nil }
+
+func TestOtherBodyReadErrorsAreNotRetried(t *testing.T) {
+	s := jiramock.New(t)
+	c, sl := newClient(s)
+	c.HTTP = &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
+		res, err := http.DefaultTransport.RoundTrip(r)
+		if err == nil {
+			_ = res.Body.Close()
+			res.Body = failingBody{}
+		}
+		return res, err
+	})}
+
+	_, err := c.Myself(t.Context())
+
+	if want := "GET /rest/api/2/myself: read response: boom"; err == nil || err.Error() != want || len(sl.slept) != 0 {
+		t.Errorf("err = %v, slept %v; want %q", err, sl.slept, want)
+	}
+}
+
+type closeCounter struct {
+	io.ReadCloser
+	closed *int
+}
+
+func (b closeCounter) Close() error {
+	*b.closed++
+	return b.ReadCloser.Close()
+}
+
+func TestResponseBodiesAreClosed(t *testing.T) {
+	s := jiramock.New(t)
+	s.Inject(jiramock.Fault{Status: http.StatusServiceUnavailable, Times: 1})
+	s.Inject(jiramock.Fault{Status: http.StatusUnauthorized, Times: 1})
+	c, _ := newClient(s)
+	closed := 0
+	c.HTTP = &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
+		res, err := http.DefaultTransport.RoundTrip(r)
+		if err == nil {
+			res.Body = closeCounter{res.Body, &closed}
+		}
+		return res, err
+	})}
+
+	if _, err := c.Myself(t.Context()); !errors.Is(err, jira.ErrUnauthenticated) {
+		t.Fatalf("err = %v, want ErrUnauthenticated", err)
+	}
+	if _, err := c.Myself(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(s.Requests()); closed != n {
+		t.Errorf("closed %d of %d bodies", closed, n)
 	}
 }
 
