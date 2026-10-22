@@ -92,7 +92,6 @@ func TestParseTrimsOneTrailingSlash(t *testing.T) {
 	for in, want := range map[string]string{
 		"https://jira.example.com/":       "https://jira.example.com",
 		"https://jira.example.com/jira/":  "https://jira.example.com/jira",
-		"http://jira.example.com:8080//":  "http://jira.example.com:8080/",
 		"https://jira.example.com/jira":   "https://jira.example.com/jira",
 		"HTTPS://jira.example.com/":       "HTTPS://jira.example.com",
 		"https://user@jira.example.com/a": "https://user@jira.example.com/a",
@@ -133,6 +132,18 @@ func TestParseRejects(t *testing.T) {
 		{"jira_url: jira.example.com\nprojects: [PLAT]\n", `config.yml: jira_url: must be an absolute http or https URL with no query or fragment: "jira.example.com"`},
 		{"jira_url: ftp://jira.example.com\nprojects: [PLAT]\n", `config.yml: jira_url: must be an absolute http or https URL with no query or fragment: "ftp://jira.example.com"`},
 		{"jira_url: https:///path\nprojects: [PLAT]\n", `config.yml: jira_url: must be an absolute http or https URL with no query or fragment: "https:///path"`},
+		{"jira_url: https://:443\nprojects: [PLAT]\n", `config.yml: jira_url: must be an absolute http or https URL with no query or fragment: "https://:443"`},
+		{"jira_url: https://jira.example.com//\nprojects: [PLAT]\n", `config.yml: jira_url: must not end in /: "https://jira.example.com/"`},
+		{minimal + "bogus: 1\nother: 2\n", `config.yml: line 3: unknown key "bogus"`},
+		{minimal + "window: {days: 30, unresolved: 180}\n", `config.yml: line 3: unknown key "unresolved"`},
+		{minimal + "concurrency: '8'\n", "config.yml: line 3: cannot unmarshal !!str `8` into int"},
+		{"jira_url: [\n", "config.yml: yaml: line 1: did not find expected node content"},
+		{minimal + "concurrency: 1.5\n", "config.yml: concurrency: must be an integer"},
+		{minimal + "concurrency: ~\n", "config.yml: concurrency: must be an integer"},
+		{minimal + "window: {days: 7.9}\n", "config.yml: window.days: must be an integer"},
+		{minimal + "window: {unresolved_days: 180.5}\n", "config.yml: window.unresolved_days: must be an integer"},
+		{"jira_url: https://jira.example.com\nprojects: [PLAT, ~]\n", `config.yml: projects: invalid key "~"`},
+		{"jira_url: https://jira.example.com\nprojects: [~]\n", `config.yml: projects: invalid key "~"`},
 		{"jira_url: https://jira.example.com?x=1\nprojects: [PLAT]\n", `config.yml: jira_url: must be an absolute http or https URL with no query or fragment: "https://jira.example.com?x=1"`},
 		{"jira_url: https://jira.example.com?\nprojects: [PLAT]\n", `config.yml: jira_url: must be an absolute http or https URL with no query or fragment: "https://jira.example.com?"`},
 		{"jira_url: 'https://jira.example.com#'\nprojects: [PLAT]\n", `config.yml: jira_url: must be an absolute http or https URL with no query or fragment: "https://jira.example.com#"`},
@@ -172,33 +183,13 @@ func TestParseRejects(t *testing.T) {
 		{minimal + "fields: {customfield_1: a, customfield_01: b, customfield_1: c}\n", `config.yml: fields: duplicate id "customfield_1"`},
 		{minimal + "fields: {customfield_1: sprint, customfield_2: sprint}\n", `config.yml: fields: duplicate name "sprint"`},
 	} {
-		_, err := config.Parse([]byte(tc.data))
+		c, err := config.Parse([]byte(tc.data))
 		if err == nil || err.Error() != tc.want {
 			t.Errorf("Parse(%q) error = %v, want %q", tc.data, err, tc.want)
 		}
-	}
-}
-
-func TestParseRejectsUnknownKeys(t *testing.T) {
-	for _, data := range []string{
-		minimal + "bogus: 1\n",
-		minimal + "window: {days: 30, unresolved: 180}\n",
-		"jira_url: [\n",
-	} {
-		c, err := config.Parse([]byte(data))
-		if err == nil {
-			t.Errorf("Parse(%q) succeeded, want error", data)
-		}
 		if !reflect.DeepEqual(c, config.Config{}) {
-			t.Errorf("Parse(%q) = %+v, want zero Config on error", data, c)
+			t.Errorf("Parse(%q) = %+v, want zero Config on error", tc.data, c)
 		}
-	}
-}
-
-func TestParseReturnsZeroConfigWhenInvalid(t *testing.T) {
-	c, err := config.Parse([]byte(minimal + "concurrency: 0\n"))
-	if err == nil || !reflect.DeepEqual(c, config.Config{}) {
-		t.Errorf("Parse = %+v, %v; want zero Config and an error", c, err)
 	}
 }
 
@@ -210,6 +201,11 @@ func TestValidate(t *testing.T) {
 	c.Concurrency = 65
 	if err := c.Validate(); err == nil {
 		t.Error("Validate() accepted concurrency 65")
+	}
+	c = exampleConfig()
+	c.JiraURL += "/"
+	if err := c.Validate(); err == nil {
+		t.Errorf("Validate() accepted jira_url %q", c.JiraURL)
 	}
 }
 
@@ -356,6 +352,20 @@ func TestFindRoot(t *testing.T) {
 	}
 	if got, err := config.FindRoot(mkdir(t, nested, "x"), top); err != nil || got != nested {
 		t.Errorf("FindRoot(nested) = %q, %v; want %q", got, err, nested)
+	}
+}
+
+func TestFindRootRelative(t *testing.T) {
+	top, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeConfig(t, top)
+	t.Chdir(mkdir(t, top, "a"))
+	for _, tc := range [][2]string{{".", top}, {".", ".."}, {top, ".."}} {
+		if got, err := config.FindRoot(tc[0], tc[1]); err != nil || got != top {
+			t.Errorf("FindRoot(%q, %q) = %q, %v; want %q", tc[0], tc[1], got, err, top)
+		}
 	}
 }
 

@@ -21,7 +21,7 @@ import (
 	"github.com/rosenhouse-bot-sandbox/jira-git-cache/internal/textfmt"
 )
 
-// Paths relative to the repo's top level.
+// Dir and File are relative to the repo's top level.
 const (
 	Dir  = ".jira-git-cache"
 	File = ".jira-git-cache/config.yml"
@@ -34,6 +34,8 @@ var (
 	projectKey = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 	fieldID    = regexp.MustCompile(`^customfield_[0-9]+$`)
 	fieldName  = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+	unknownKey = regexp.MustCompile(`^(line \d+: )field (\S+) not found in type \S+$`)
 )
 
 // Window selects issues updated within Days, or unresolved and updated within UnresolvedDays.
@@ -123,13 +125,13 @@ func Default() Config {
 
 // FindRoot walks up from dir to top, inclusive, and returns the first directory containing File.
 func FindRoot(dir, top string) (string, error) {
-	dir, err := filepath.EvalSymlinks(dir)
+	dir, err := realPath(dir)
 	if err != nil {
-		return "", fmt.Errorf("find config: %w", err)
+		return "", err
 	}
-	top, err = filepath.EvalSymlinks(top)
+	top, err = realPath(top)
 	if err != nil {
-		return "", fmt.Errorf("find config: %w", err)
+		return "", err
 	}
 	if rel, err := filepath.Rel(top, dir); err != nil || !filepath.IsLocal(rel) {
 		return "", ErrNotFound
@@ -143,6 +145,17 @@ func FindRoot(dir, top string) (string, error) {
 		}
 		dir = filepath.Dir(dir)
 	}
+}
+
+func realPath(path string) (string, error) {
+	path, err := filepath.Abs(path)
+	if err == nil {
+		path, err = filepath.EvalSymlinks(path)
+	}
+	if err != nil {
+		return "", fmt.Errorf("find config: %w", err)
+	}
+	return path, nil
 }
 
 // Load reads and parses root/File.
@@ -160,16 +173,61 @@ func Parse(data []byte) (Config, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&c); err != nil && !errors.Is(err, io.EOF) {
-		return Config{}, fmt.Errorf("config.yml: %w", err)
+		return Config{}, decodeError(err)
 	}
 	if err := dec.Decode(new(yaml.Node)); !errors.Is(err, io.EOF) {
 		return Config{}, errors.New("config.yml: must hold one YAML document")
+	}
+	if err := checkScalars(data); err != nil {
+		return Config{}, fmt.Errorf("config.yml: %w", err)
 	}
 	c.JiraURL = strings.TrimSuffix(c.JiraURL, "/")
 	if err := c.Validate(); err != nil {
 		return Config{}, err
 	}
 	return c, nil
+}
+
+func decodeError(err error) error {
+	var te *yaml.TypeError
+	if !errors.As(err, &te) {
+		return fmt.Errorf("config.yml: %w", err)
+	}
+	return errors.New("config.yml: " + unknownKey.ReplaceAllString(te.Errors[0], `${1}unknown key "$2"`))
+}
+
+// rawScalars holds the nodes that yaml.v3 would silently coerce:
+// it drops null list entries and truncates floats to ints.
+type rawScalars struct {
+	Projects []yaml.Node `yaml:"projects"`
+	Window   struct {
+		Days           yaml.Node `yaml:"days"`
+		UnresolvedDays yaml.Node `yaml:"unresolved_days"`
+	} `yaml:"window"`
+	Concurrency yaml.Node `yaml:"concurrency"`
+}
+
+func checkScalars(data []byte) error {
+	var raw rawScalars
+	_ = yaml.Unmarshal(data, &raw) // The strict decode in Parse already reported any error.
+	for _, p := range raw.Projects {
+		if !isString(&p) {
+			return fmt.Errorf("projects: invalid key %q", p.Value)
+		}
+	}
+	for _, n := range []struct {
+		key  string
+		node yaml.Node
+	}{
+		{"window.days", raw.Window.Days},
+		{"window.unresolved_days", raw.Window.UnresolvedDays},
+		{"concurrency", raw.Concurrency},
+	} {
+		if n.node.Kind != 0 && n.node.ShortTag() != "!!int" {
+			return fmt.Errorf("%s: must be an integer", n.key)
+		}
+	}
+	return nil
 }
 
 // Validate returns the first problem with c, as "config.yml: <key>: <problem>".
@@ -181,8 +239,11 @@ func (c Config) Validate() error {
 }
 
 func (c Config) validate() error {
-	if u, err := url.Parse(c.JiraURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || strings.ContainsAny(c.JiraURL, "?#") {
+	if u, err := url.Parse(c.JiraURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || strings.ContainsAny(c.JiraURL, "?#") {
 		return fmt.Errorf("jira_url: must be an absolute http or https URL with no query or fragment: %q", c.JiraURL)
+	}
+	if strings.HasSuffix(c.JiraURL, "/") {
+		return fmt.Errorf("jira_url: must not end in /: %q", c.JiraURL)
 	}
 	switch c.CacheBranch {
 	case "":
@@ -251,7 +312,6 @@ func (c Config) Marshal() []byte {
 	enc := yaml.NewEncoder(&b)
 	enc.SetIndent(2)
 	_ = enc.Encode(c)
-	_ = enc.Close()
 	return b.Bytes()
 }
 
