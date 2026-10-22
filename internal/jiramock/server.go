@@ -64,10 +64,11 @@ type Server struct {
 	// It may call Put or Delete (to shift total between pages) or block (to observe concurrency).
 	OnRequest func(Request)
 
-	mu       sync.Mutex
-	issues   map[string]stored
-	faults   []Fault
-	requests []Request
+	mu          sync.Mutex
+	issues      map[string]stored
+	putProjects map[string]bool
+	faults      []Fault
+	requests    []Request
 }
 
 type stored struct {
@@ -87,6 +88,7 @@ func New(t testing.TB) *Server {
 		Fields:         ExampleFields(),
 		Now:            func() time.Time { return DefaultNow },
 		issues:         map[string]stored{},
+		putProjects:    map[string]bool{},
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /rest/api/2/serverInfo", s.serverInfo)
@@ -101,12 +103,14 @@ func New(t testing.TB) *Server {
 	return s
 }
 
-// Put inserts or replaces issues by Key. It panics on a time that is not in Layout.
+// Put stores copies of issues, inserting or replacing by Key. It panics on a time that is not in Layout.
 func (s *Server) Put(issues ...Issue) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, i := range issues {
+		i = deepCopy(i)
 		s.issues[i.Key] = stored{Issue: i, updated: mustTime(i.Key, i.Fields["updated"]), comments: sortComments(i)}
+		s.putProjects[projectOf(i.Key)] = true
 	}
 }
 
@@ -135,7 +139,7 @@ func (s *Server) Requests() []Request {
 
 func (s *Server) serve(mux http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		req := Request{Method: r.Method, Path: r.URL.Path, Query: r.URL.Query(), Header: r.Header.Clone()}
+		req := Request{Method: r.Method, Path: r.URL.Path, Query: r.URL.Query(), Header: r.Header}
 		s.mu.Lock()
 		s.requests = append(s.requests, req)
 		s.mu.Unlock()
@@ -299,12 +303,7 @@ func (s *Server) current(project string) string {
 }
 
 func (s *Server) known(project string) bool {
-	for k := range s.issues {
-		if projectOf(k) == project {
-			return true
-		}
-	}
-	return slices.Contains(s.Projects, project)
+	return s.putProjects[project] || slices.Contains(s.Projects, project)
 }
 
 func (s *Server) match(q query, projects []string) []stored {
@@ -390,7 +389,7 @@ func parseJQL(jql string) (query, bool) {
 }
 
 func (q query) keep(st stored, now time.Time) bool {
-	within := func(days int) bool { return !st.updated.Before(now.Add(-time.Duration(days) * 24 * time.Hour)) }
+	within := func(days int) bool { return !st.updated.Before(now.UTC().AddDate(0, 0, -days)) }
 	return !q.windowed || within(q.days) || st.Fields["resolution"] == nil && within(q.unresolvedDays)
 }
 
@@ -467,8 +466,8 @@ func intParam(w http.ResponseWriter, q url.Values, name string, def int) (int, b
 }
 
 func page[T any](items []T, start, limit int) []T {
-	end := min(start+limit, len(items))
-	return items[min(start, end):end]
+	start = min(start, len(items))
+	return items[start : start+min(limit, len(items)-start)]
 }
 
 func selectFields(all map[string]any, q url.Values) map[string]any {

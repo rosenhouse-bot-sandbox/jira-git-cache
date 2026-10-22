@@ -1,9 +1,10 @@
 package jiramock_test
 
 import (
+	"bytes"
 	"encoding/json"
+	"os"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -85,49 +86,20 @@ func TestIssueJSONPanicsOnUnencodableField(t *testing.T) {
 }
 
 func TestExampleIssue(t *testing.T) {
-	iss := jiramock.ExampleIssue()
-
-	if iss.Key != "PLAT-123" || iss.ID != "10230" {
-		t.Errorf("key, id = %s, %s", iss.Key, iss.ID)
-	}
-	f := iss.Fields
-	if f["updated"] != "2026-10-20T11:15:40.123+0200" {
-		t.Errorf("updated = %v", f["updated"])
-	}
-	if f["created"] != "2026-10-01T16:02:11.000+0200" {
-		t.Errorf("created = %v", f["created"])
-	}
-	if d, _ := f["description"].(string); !strings.Contains(d, "\r\n") {
-		t.Errorf("description %q has no CRLF", d)
-	}
-	sprints := []any{
-		jiramock.Sprint8x(41, "Sprint 41", "CLOSED", ""),
-		jiramock.Sprint10x(42, "Sprint 42", "ACTIVE", ""),
-	}
-	if !reflect.DeepEqual(f["customfield_10100"], sprints) {
-		t.Errorf("sprints = %v", f["customfield_10100"])
-	}
-	placeholder := map[string]any{"hasEpicLinkFieldDependency": false, "showField": false,
-		"nonEditableReason": map[string]any{"reason": "PLUGIN_LICENSE_ERROR", "message": "..."}}
-	if !reflect.DeepEqual(f["customfield_10700"], placeholder) {
-		t.Errorf("parent link = %v", f["customfield_10700"])
-	}
-	if f["resolution"] != nil {
-		t.Errorf("resolution = %v", f["resolution"])
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(jiramock.ExampleIssue()); err != nil {
+		t.Fatal(err)
 	}
 
-	if len(iss.Comments) != 2 {
-		t.Fatalf("comments = %v", iss.Comments)
+	want, err := os.ReadFile("testdata/example_issue.json")
+	if err != nil {
+		t.Fatal(err)
 	}
-	first := iss.Comments[0]
-	if first["id"] != "40001" || first["created"] != "2026-10-19T19:30:02.000+0200" {
-		t.Errorf("first comment = %v", first)
-	}
-	if b, _ := first["body"].(string); !strings.Contains(b, "\r\n") {
-		t.Errorf("comment body %q has no CRLF", b)
-	}
-	if iss.Comments[1]["visibility"] == nil {
-		t.Errorf("second comment has no visibility: %v", iss.Comments[1])
+	if buf.String() != string(want) {
+		t.Errorf("ExampleIssue differs from testdata/example_issue.json:\n%s", buf.String())
 	}
 }
 

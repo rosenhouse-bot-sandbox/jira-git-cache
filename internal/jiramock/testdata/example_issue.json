@@ -1,0 +1,210 @@
+{
+  "ID": "10230",
+  "Key": "PLAT-123",
+  "Fields": {
+    "assignee": {
+      "active": true,
+      "avatarUrls": {
+        "48x48": "https://jira.example.com/secure/useravatar?ownerId=JIRAUSER10100"
+      },
+      "displayName": "Jane Doe",
+      "emailAddress": "jdoe@example.com",
+      "key": "JIRAUSER10100",
+      "name": "jdoe",
+      "self": "https://jira.example.com/rest/api/2/user?username=jdoe",
+      "timeZone": "Etc/UTC"
+    },
+    "created": "2026-10-01T16:02:11.000+0200",
+    "customfield_10002": 3,
+    "customfield_10007": "PLAT-90",
+    "customfield_10100": [
+      "com.atlassian.greenhopper.service.sprint.Sprint@1a2b[id=41,rapidViewId=<null>,state=CLOSED,name=Sprint 41,startDate=2026-10-06T09:00:00.000Z,endDate=2026-10-20T00:00:00.000Z,completeDate=<null>,sequence=41,goal=]",
+      "com.atlassian.greenhopper.service.sprint.Sprint@1a2b[activatedDate=2026-10-06T09:00:00.000Z,autoStartStop=false,completeDate=<null>,endDate=2026-10-20T00:00:00.000Z,goal=,id=42,incompleteIssuesDestinationId=<null>,name=Sprint 42,rapidViewId=<null>,sequence=42,startDate=2026-10-06T09:00:00.000Z,state=ACTIVE,synced=false]"
+    ],
+    "customfield_10500": {
+      "disabled": false,
+      "id": "10401",
+      "self": "https://jira.example.com/rest/api/2/customFieldOption/10401",
+      "value": "Platform"
+    },
+    "customfield_10600": [
+      {
+        "active": true,
+        "avatarUrls": {
+          "48x48": "https://jira.example.com/secure/useravatar?ownerId=JIRAUSER10100"
+        },
+        "displayName": "Jane Doe",
+        "emailAddress": "jdoe@example.com",
+        "key": "JIRAUSER10100",
+        "name": "jdoe",
+        "self": "https://jira.example.com/rest/api/2/user?username=jdoe",
+        "timeZone": "Etc/UTC"
+      }
+    ],
+    "customfield_10700": {
+      "hasEpicLinkFieldDependency": false,
+      "nonEditableReason": {
+        "message": "...",
+        "reason": "PLUGIN_LICENSE_ERROR"
+      },
+      "showField": false
+    },
+    "description": "h2. Repro\r\n* restart controller\r\n{code}kubectl ...{code}",
+    "issuelinks": [
+      {
+        "id": "20001",
+        "outwardIssue": {
+          "fields": {
+            "issuetype": {
+              "name": "Task"
+            },
+            "priority": {
+              "name": "Medium"
+            },
+            "status": {
+              "name": "Open"
+            },
+            "summary": "Watch cache rewrite"
+          },
+          "id": "10240",
+          "key": "PLAT-130"
+        },
+        "type": {
+          "id": "10000",
+          "inward": "is blocked by",
+          "name": "Blocks",
+          "outward": "blocks"
+        }
+      },
+      {
+        "id": "20002",
+        "inwardIssue": {
+          "fields": {
+            "status": {
+              "name": "Done"
+            },
+            "summary": "Node restarts"
+          },
+          "id": "30077",
+          "key": "INFRA-77"
+        },
+        "type": {
+          "id": "10003",
+          "inward": "relates to",
+          "name": "Relates",
+          "outward": "relates to"
+        }
+      }
+    ],
+    "issuetype": {
+      "avatarId": 10303,
+      "description": "A problem.",
+      "id": "1",
+      "name": "Bug",
+      "self": "https://jira.example.com/rest/api/2/issuetype/1",
+      "subtask": false
+    },
+    "labels": [
+      "controller",
+      "k8s"
+    ],
+    "parent": {
+      "fields": {
+        "issuetype": {
+          "name": "Story",
+          "subtask": false
+        },
+        "priority": {
+          "name": "High"
+        },
+        "status": {
+          "name": "Open",
+          "statusCategory": {
+            "key": "new",
+            "name": "To Do"
+          }
+        },
+        "summary": "Watch reliability"
+      },
+      "id": "10100",
+      "key": "PLAT-100",
+      "self": "https://jira.example.com/rest/api/2/issue/10100"
+    },
+    "priority": {
+      "id": "2",
+      "name": "High",
+      "self": "https://jira.example.com/rest/api/2/priority/2"
+    },
+    "reporter": {
+      "active": true,
+      "displayName": "John Smith",
+      "emailAddress": "jsmith@example.com",
+      "key": "jsmith",
+      "name": "jsmith"
+    },
+    "resolution": null,
+    "status": {
+      "description": "",
+      "id": "3",
+      "name": "In Progress",
+      "self": "https://jira.example.com/rest/api/2/status/3",
+      "statusCategory": {
+        "colorName": "yellow",
+        "id": 4,
+        "key": "indeterminate",
+        "name": "In Progress"
+      }
+    },
+    "summary": "Controller leaks watches on restart",
+    "updated": "2026-10-20T11:15:40.123+0200"
+  },
+  "Comments": [
+    {
+      "author": {
+        "active": true,
+        "avatarUrls": {
+          "48x48": "https://jira.example.com/secure/useravatar?ownerId=JIRAUSER10100"
+        },
+        "displayName": "Jane Doe",
+        "emailAddress": "jdoe@example.com",
+        "key": "JIRAUSER10100",
+        "name": "jdoe",
+        "self": "https://jira.example.com/rest/api/2/user?username=jdoe",
+        "timeZone": "Etc/UTC"
+      },
+      "body": "Repro'd on *staging*.\r\n{code}\r\nkubectl get pods\r\n{code}",
+      "created": "2026-10-19T19:30:02.000+0200",
+      "id": "40001",
+      "self": "https://jira.example.com/rest/api/2/issue/10230/comment/40001",
+      "updateAuthor": {
+        "active": true,
+        "avatarUrls": {
+          "48x48": "https://jira.example.com/secure/useravatar?ownerId=JIRAUSER10100"
+        },
+        "displayName": "Jane Doe",
+        "emailAddress": "jdoe@example.com",
+        "key": "JIRAUSER10100",
+        "name": "jdoe",
+        "self": "https://jira.example.com/rest/api/2/user?username=jdoe",
+        "timeZone": "Etc/UTC"
+      },
+      "updated": "2026-10-19T19:30:02.000+0200"
+    },
+    {
+      "author": {
+        "active": true,
+        "displayName": "John Smith",
+        "name": "jsmith"
+      },
+      "body": "Fixed.",
+      "created": "2026-10-20T10:00:00.000+0200",
+      "id": "40002",
+      "self": "https://jira.example.com/rest/api/2/issue/10230/comment/40002",
+      "updated": "2026-10-20T11:00:00.000+0200",
+      "visibility": {
+        "type": "role",
+        "value": "Developers"
+      }
+    }
+  ]
+}

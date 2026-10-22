@@ -4,10 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"reflect"
+	"runtime"
 	"slices"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -175,10 +179,10 @@ func TestOmitUserHeader(t *testing.T) {
 
 func TestMyself(t *testing.T) {
 	s := jiramock.New(t)
-	s.User = "bot"
+	s.User = "svc bot"
 
-	get(t, s, "/rest/api/2/myself").want(t, http.StatusOK, `{"active":true,"displayName":"bot","key":"JIRAUSER10500",`+
-		`"name":"bot","self":"`+s.URL+`/rest/api/2/user?username=bot","timeZone":"Etc/UTC"}`)
+	get(t, s, "/rest/api/2/myself").want(t, http.StatusOK, `{"active":true,"displayName":"svc bot","key":"JIRAUSER10500",`+
+		`"name":"svc bot","self":"`+s.URL+`/rest/api/2/user?username=svc+bot","timeZone":"Etc/UTC"}`)
 	getAs(t, s, "/rest/api/2/myself", "").want(t, http.StatusUnauthorized, notAuthenticated)
 }
 
@@ -543,13 +547,17 @@ func comments(t *testing.T, s *jiramock.Server, query string) commentPage {
 func TestCommentsOrder(t *testing.T) {
 	s := commentFixture(t)
 
-	for query, want := range map[string][]string{
-		"":                  {"11", "9", "10", "12"},
-		"?orderBy=created":  {"11", "9", "10", "12"},
-		"?orderBy=-created": {"12", "10", "9", "11"},
+	ascending, descending := []string{"11", "9", "10", "12"}, []string{"12", "10", "9", "11"}
+	for _, tc := range []struct {
+		query string
+		want  []string
+	}{
+		{"?orderBy=-created", descending},
+		{"", ascending},
+		{"?orderBy=created", ascending},
 	} {
-		if got := comments(t, s, query).ids(); !slices.Equal(got, want) {
-			t.Errorf("%q: ids = %v, want %v", query, got, want)
+		if got := comments(t, s, tc.query).ids(); !slices.Equal(got, tc.want) {
+			t.Errorf("%q: ids = %v, want %v", tc.query, got, tc.want)
 		}
 	}
 }
@@ -761,5 +769,116 @@ func TestOnRequestRunsBeforeEvaluationWithoutTheLock(t *testing.T) {
 
 	if first.Total != 1 || second.Total != 2 || !slices.Equal(seen, []string{"0", "1"}) {
 		t.Errorf("totals %d, %d; seen %v", first.Total, second.Total, seen)
+	}
+}
+
+func TestSearchWindowAcceptsHugeDayCounts(t *testing.T) {
+	s := jiramock.New(t)
+	s.Put(jiramock.NewIssue("PLAT-1", 1, jiramock.DefaultNow.AddDate(-1, 0, 0)))
+
+	if p := search(t, s, windowJQL("PLAT", 1, 1_000_000)); p.Total != 1 {
+		t.Errorf("total = %d", p.Total)
+	}
+}
+
+func TestSearchWindowCountsDaysAs24Hours(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := jiramock.New(t)
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, ny) // 2 days after DST ends
+	s.Now = func() time.Time { return now }
+	s.Put(jiramock.NewIssue("PLAT-1", 1, now.Add(-7*24*time.Hour-time.Millisecond)))
+
+	if p := search(t, s, windowJQL("PLAT", 7, 7)); p.Total != 0 {
+		t.Errorf("total = %d", p.Total)
+	}
+}
+
+func TestPagingPastTheEndWithHugeStartAt(t *testing.T) {
+	s := commentFixture(t)
+	huge := strconv.Itoa(math.MaxInt)
+
+	if p := search(t, s, windowJQL("PLAT", 30, 180), "startAt", huge); p.Total != 1 || len(p.Issues) != 0 {
+		t.Errorf("search: %+v", p)
+	}
+	if p := comments(t, s, "?startAt="+huge); p.Total != 4 || len(p.Comments) != 0 {
+		t.Errorf("comments: %+v", p)
+	}
+}
+
+func TestProjectStaysKnownAfterItsLastIssueIsDeleted(t *testing.T) {
+	s := jiramock.New(t)
+	s.Put(jiramock.NewIssue("PLAT-1", 1, jiramock.DefaultNow))
+	s.Delete("PLAT-1")
+
+	if p := search(t, s, windowJQL("PLAT", 30, 180)); p.Total != 0 {
+		t.Errorf("total = %d", p.Total)
+	}
+}
+
+func TestPutCopiesTheIssue(t *testing.T) {
+	s := jiramock.New(t)
+	iss := jiramock.ExampleIssue()
+	want := string(iss.JSON())
+	s.Put(iss)
+
+	iss.Fields["updated"] = jiramock.DefaultNow.AddDate(-5, 0, 0).Format(jiramock.Layout)
+	iss.Fields["status"].(map[string]any)["name"] = "changed"
+	iss.Comments[0]["body"] = "changed"
+
+	get(t, s, "/rest/api/2/issue/PLAT-123").want(t, http.StatusOK, want)
+	got := decode[commentPage](t, get(t, s, "/rest/api/2/issue/PLAT-123/comment"))
+	if !reflect.DeepEqual(got.Comments, jiramock.ExampleIssue().Comments) {
+		t.Errorf("comments = %v", got.Comments)
+	}
+}
+
+func TestConcurrentRequests(t *testing.T) {
+	const n, failures = 40, 20
+	s := jiramock.New(t)
+	s.Put(jiramock.NewIssue("PLAT-1000", 1000, jiramock.DefaultNow))
+	s.Inject(jiramock.Fault{Path: "/rest/api/2/search", Status: http.StatusServiceUnavailable, Times: failures})
+	s.OnRequest = func(r jiramock.Request) {
+		key := "PLAT-" + r.Query.Get("startAt")
+		s.Put(jiramock.NewIssue(key, 1, jiramock.DefaultNow))
+		s.Delete(key)
+		s.Inject(jiramock.Fault{Path: "/elsewhere", Status: http.StatusTeapot})
+	}
+	statuses := make(chan int, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+				s.URL+searchPath(windowJQL("PLAT", 30, 180), "startAt", strconv.Itoa(i+1)), nil)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			req.Header.Set("Authorization", "Bearer "+s.Token)
+			res, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			_ = res.Body.Close()
+			statuses <- res.StatusCode
+		}()
+	}
+	for len(s.Requests()) < n && !t.Failed() {
+		runtime.Gosched()
+	}
+	wg.Wait()
+	close(statuses)
+
+	count := map[int]int{}
+	for st := range statuses {
+		count[st]++
+	}
+	if want := map[int]int{http.StatusServiceUnavailable: failures, http.StatusOK: n - failures}; !reflect.DeepEqual(count, want) {
+		t.Errorf("statuses = %v, want %v", count, want)
 	}
 }

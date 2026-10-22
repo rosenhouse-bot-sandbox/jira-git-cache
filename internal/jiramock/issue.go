@@ -46,6 +46,12 @@ func (i Issue) JSON() []byte {
 	return mustJSON(newIssueBody(i, i.Fields))
 }
 
+func deepCopy[T any](v T) T {
+	var c T
+	_ = json.Unmarshal(mustJSON(v), &c)
+	return c
+}
+
 func mustJSON(v any) []byte {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
