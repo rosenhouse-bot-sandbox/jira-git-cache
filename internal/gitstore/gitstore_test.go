@@ -614,3 +614,58 @@ func TestNotIgnoredPathOutsideRepoFails(t *testing.T) {
 		t.Fatalf("err = %v, want *gitstore.Error", err)
 	}
 }
+
+// stubGit puts a git on PATH that runs script, and returns a file the stub
+// creates once it is running.
+func stubGit(t *testing.T, script string) (started string) {
+	t.Helper()
+	bin := t.TempDir()
+	started = filepath.Join(bin, "started")
+	stub := fmt.Sprintf("#!/bin/sh\ntouch %q\n%s\n", started, script)
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return started
+}
+
+// cancelWhenStarted runs Open, cancels it once git is running, and returns
+// how long Open took to return after the cancel.
+func cancelWhenStarted(t *testing.T, started string) time.Duration {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := gitstore.Open(ctx, t.TempDir())
+		done <- err
+	}()
+	for _, err := os.Stat(started); err != nil; _, err = os.Stat(started) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	begin := time.Now()
+	if err := <-done; err == nil {
+		t.Error("Open succeeded after cancel")
+	}
+	return time.Since(begin)
+}
+
+func TestCancelLetsGitCleanUp(t *testing.T) {
+	cleaned := filepath.Join(t.TempDir(), "cleaned")
+	started := stubGit(t, fmt.Sprintf("trap 'touch %q; exit 143' TERM\nwhile :; do sleep 0.01; done", cleaned))
+
+	cancelWhenStarted(t, started)
+
+	if _, err := os.Stat(cleaned); err != nil {
+		t.Errorf("git got no chance to clean up: %v", err)
+	}
+}
+
+func TestCancelKillsGitThatIgnoresTerm(t *testing.T) {
+	started := stubGit(t, "trap '' TERM\ni=0; while [ $i -lt 2000 ]; do sleep 0.01; i=$((i+1)); done")
+
+	if elapsed := cancelWhenStarted(t, started); elapsed > 10*time.Second {
+		t.Errorf("git ran %v after cancel", elapsed)
+	}
+}
