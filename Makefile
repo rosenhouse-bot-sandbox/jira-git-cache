@@ -18,4 +18,4 @@ cover:
 		'/^total:/ { sub("%", "", $$3); printf "coverage %s%% (min %s%%)\n", $$3, min; exit ($$3 + 0 < min + 0) }'
 
 mutate:
-	gremlins unleash --threshold-efficacy $(EFFICACY_MIN) --threshold-mcover $(MCOVER_MIN) ./...
+	gremlins unleash --threshold-efficacy $(EFFICACY_MIN) --threshold-mcover $(MCOVER_MIN) .
