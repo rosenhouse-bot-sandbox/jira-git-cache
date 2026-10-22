@@ -47,7 +47,11 @@ type Options struct {
 
 const origin = "origin"
 
-var runnerLabel = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+var (
+	runnerLabel = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+	// badBranch matches the names that git check-ref-format --branch rejects.
+	badBranch = regexp.MustCompile(`^-|^HEAD$|^@$|(^|/)\.|\.lock(/|$)|\.\.|@\{|//|^/|/$|\.$|[\x00-\x20\x7f~^:?*\[\\]`)
+)
 
 // Run asks for the cache repo's settings, checks them against Jira, writes the
 // repo's files and creates the cache branch.
@@ -85,7 +89,7 @@ func (s *session) run(ctx context.Context, repo *gitstore.Repo) error {
 	}
 	if !existing {
 		cfg = config.Default()
-		if cfg.JiraURL, err = askValid(s, "Jira URL: ", "", "jira-url", s.Answers.JiraURL, parseURL); err != nil {
+		if cfg.JiraURL, err = askValid(ctx, s, "Jira URL: ", "", "jira-url", s.Answers.JiraURL, parseURL); err != nil {
 			return err
 		}
 	}
@@ -94,19 +98,19 @@ func (s *session) run(ctx context.Context, repo *gitstore.Repo) error {
 		return err
 	}
 	if !existing {
-		if err := s.askWindow(&cfg); err != nil {
+		if err := s.askWindow(ctx, &cfg); err != nil {
 			return err
 		}
 	}
 	if err := s.countWindow(ctx, client, cfg); err != nil {
 		return err
 	}
-	labels, err := s.askLabels(repo.Dir)
+	labels, err := s.askLabels(ctx, repo.Dir)
 	if err != nil {
 		return err
 	}
 	if !existing {
-		if cfg.CacheBranch, err = askValid(s, fmt.Sprintf("Cache branch [%s]: ", cfg.CacheBranch), cfg.CacheBranch,
+		if cfg.CacheBranch, err = askValid(ctx, s, fmt.Sprintf("Cache branch [%s]: ", cfg.CacheBranch), cfg.CacheBranch,
 			"cache-branch", s.Answers.CacheBranch, parseBranch); err != nil {
 			return err
 		}
@@ -114,6 +118,9 @@ func (s *session) run(ctx context.Context, repo *gitstore.Repo) error {
 		if cfg.Fields, err = s.chooseFields(ctx, client, cfg.Projects); err != nil {
 			return err
 		}
+	}
+	if err := answerError(cfg.Validate()); err != nil {
+		return err
 	}
 	s.paragraph()
 	if err := s.writeFiles(repo.Dir, cfg, labels); err != nil {
@@ -141,7 +148,7 @@ func (s *session) paragraph() {
 	}
 }
 
-func (s *session) ask(prompt, def, flag string, preset *string) (string, error) {
+func (s *session) ask(ctx context.Context, prompt, def, flag string, preset *string) (string, error) {
 	if preset != nil {
 		s.printf("%s\n", strings.TrimRight(prompt+*preset, " "))
 		return cmp.Or(strings.TrimSpace(*preset), def), nil
@@ -153,17 +160,39 @@ func (s *session) ask(prompt, def, flag string, preset *string) (string, error) 
 		return def, nil
 	}
 	s.printf("%s", prompt)
-	line, err := s.in.ReadString('\n')
+	line, err := s.readLine(ctx)
 	if err != nil {
-		return "", errors.New("setup: input ended")
+		return "", err
 	}
 	return cmp.Or(strings.TrimSpace(line), def), nil
 }
 
+// readLine returns early when ctx is done, because SIGINT only cancels ctx.
+func (s *session) readLine(ctx context.Context) (string, error) {
+	type result struct {
+		line string
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		line, err := s.in.ReadString('\n')
+		ch <- result{line, err}
+	}()
+	select {
+	case <-ctx.Done():
+		return "", fmt.Errorf("setup: %w", ctx.Err())
+	case r := <-ch:
+		if r.err != nil && r.line == "" {
+			return "", errors.New("setup: input ended")
+		}
+		return r.line, nil
+	}
+}
+
 // askValid asks until parse accepts the answer. A preset or non-interactive answer gets one try.
-func askValid[T any](s *session, prompt, def, flag string, preset *string, parse func(string) (T, error)) (T, error) {
+func askValid[T any](ctx context.Context, s *session, prompt, def, flag string, preset *string, parse func(string) (T, error)) (T, error) {
 	for {
-		answer, err := s.ask(prompt, def, flag, preset)
+		answer, err := s.ask(ctx, prompt, def, flag, preset)
 		if err != nil {
 			var zero T
 			return zero, err
@@ -181,7 +210,15 @@ func validate(edit func(*config.Config)) error {
 	c := config.Default()
 	c.JiraURL, c.Projects = "https://jira.invalid", []string{"P"}
 	edit(&c)
-	return c.Validate()
+	return answerError(c.Validate())
+}
+
+// answerError drops Validate's "config.yml: " prefix, because config.yml is not written yet.
+func answerError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return errors.New(strings.TrimPrefix(err.Error(), "config.yml: "))
 }
 
 func parseURL(v string) (string, error) {
@@ -198,6 +235,9 @@ func parseProjects(v string) ([]string, error) {
 }
 
 func parseBranch(v string) (string, error) {
+	if badBranch.MatchString(v) {
+		return "", fmt.Errorf("cache_branch: invalid branch name %q", v)
+	}
 	return v, validate(func(c *config.Config) { c.CacheBranch = v })
 }
 
@@ -255,30 +295,32 @@ func (s *session) authenticate(ctx context.Context, jiraURL string) (*jira.Clien
 	return client, nil
 }
 
-func (s *session) askWindow(cfg *config.Config) error {
+func (s *session) askWindow(ctx context.Context, cfg *config.Config) error {
 	var err error
-	if cfg.Projects, err = askValid(s, "Projects (comma-separated keys): ", "", "projects", s.Answers.Projects, parseProjects); err != nil {
+	if cfg.Projects, err = askValid(ctx, s, "Projects (comma-separated keys): ", "", "projects", s.Answers.Projects, parseProjects); err != nil {
 		return err
 	}
-	if cfg.Window.Days, err = askValid(s, fmt.Sprintf("Keep every issue updated within days [%d]: ", cfg.Window.Days),
-		strconv.Itoa(cfg.Window.Days), "days", s.Answers.Days, func(v string) (int, error) {
-			days, err := parseDays(v)
-			if err != nil {
-				return 0, err
-			}
-			return days, validate(func(c *config.Config) { c.Window = config.Window{Days: days, UnresolvedDays: days} })
-		}); err != nil {
+	prompt, def := fmt.Sprintf("Keep every issue updated within days [%d]: ", cfg.Window.Days), cfg.Window.Days
+	parse := parseWindowDays(func(days int) config.Window { return config.Window{Days: days, UnresolvedDays: days} })
+	if cfg.Window.Days, err = askValid(ctx, s, prompt, strconv.Itoa(def), "days", s.Answers.Days, parse); err != nil {
 		return err
 	}
-	cfg.Window.UnresolvedDays, err = askValid(s, fmt.Sprintf("Also keep unresolved issues updated within days [%d]: ", cfg.Window.UnresolvedDays),
-		strconv.Itoa(cfg.Window.UnresolvedDays), "unresolved-days", s.Answers.UnresolvedDays, func(v string) (int, error) {
-			days, err := parseDays(v)
-			if err != nil {
-				return 0, err
-			}
-			return days, validate(func(c *config.Config) { c.Window = config.Window{Days: cfg.Window.Days, UnresolvedDays: days} })
-		})
+	def = max(cfg.Window.UnresolvedDays, cfg.Window.Days)
+	prompt = fmt.Sprintf("Also keep unresolved issues updated within days [%d]: ", def)
+	parse = parseWindowDays(func(days int) config.Window { return config.Window{Days: cfg.Window.Days, UnresolvedDays: days} })
+	cfg.Window.UnresolvedDays, err = askValid(ctx, s, prompt, strconv.Itoa(def), "unresolved-days", s.Answers.UnresolvedDays, parse)
 	return err
+}
+
+// parseWindowDays returns a parser that checks its days as part of window(days).
+func parseWindowDays(window func(days int) config.Window) func(string) (int, error) {
+	return func(v string) (int, error) {
+		days, err := parseDays(v)
+		if err != nil {
+			return 0, err
+		}
+		return days, validate(func(c *config.Config) { c.Window = window(days) })
+	}
 }
 
 func (s *session) countWindow(ctx context.Context, client *jira.Client, cfg config.Config) error {
@@ -308,11 +350,11 @@ func projectError(project string, err error) error {
 }
 
 // askLabels asks for runner labels only when the workflow is missing, because config.yml does not store them.
-func (s *session) askLabels(top string) ([]string, error) {
+func (s *session) askLabels(ctx context.Context, top string) ([]string, error) {
 	if _, err := os.Stat(filepath.Join(top, workflowPath)); err == nil {
 		return nil, nil
 	}
-	return askValid(s, "Runner labels [self-hosted]: ", "self-hosted", "runner-labels", s.Answers.RunnerLabels, parseLabels)
+	return askValid(ctx, s, "Runner labels [self-hosted]: ", "self-hosted", "runner-labels", s.Answers.RunnerLabels, parseLabels)
 }
 
 func (s *session) writeFiles(top string, cfg config.Config, labels []string) error {
@@ -366,7 +408,7 @@ func (s *session) createBranch(ctx context.Context, repo *gitstore.Repo, cfg con
 		s.printf("✓ %s already exists on origin; left it alone\n", branch)
 		return nil
 	}
-	create, err := askValid(s, fmt.Sprintf("Create %s on origin with an empty snapshot? [Y/n] ", branch), "y",
+	create, err := askValid(ctx, s, fmt.Sprintf("Create %s on origin with an empty snapshot? [Y/n] ", branch), "y",
 		"create-branch", s.Answers.CreateBranch, parseYes)
 	if err != nil {
 		return err

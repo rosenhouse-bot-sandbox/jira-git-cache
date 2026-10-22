@@ -1,8 +1,10 @@
 package setup_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -223,7 +225,7 @@ func TestRunReproducesIssue2(t *testing.T) {
 	f.opts.Answers = setup.Answers{
 		JiraURL:        ptr(f.jira.URL + "/"),
 		Projects:       ptr("PLAT, INFRA"),
-		Days:           ptr(""),
+		Days:           ptr("  "),
 		UnresolvedDays: ptr(""),
 		RunnerLabels:   ptr("self-hosted, jira"),
 		CacheBranch:    ptr(""),
@@ -348,6 +350,7 @@ func TestRunInteractive(t *testing.T) {
 		"a b",
 		"ci, linux",
 		"main",
+		"bad..name",
 		"cache/jira",
 		"maybe",
 		"N",
@@ -357,16 +360,17 @@ func TestRunInteractive(t *testing.T) {
 
 	want := `Jira URL: ✓ Authenticated as svc-jira-cache on Jira Data Center 10.3.4
 
-Projects (comma-separated keys): config.yml: projects: invalid key ""
-Projects (comma-separated keys): config.yml: projects: invalid key "1X"
+Projects (comma-separated keys): projects: invalid key ""
+Projects (comma-separated keys): projects: invalid key "1X"
 Projects (comma-separated keys): Keep every issue updated within days [30]: "x" is not a whole number of days
-Keep every issue updated within days [30]: config.yml: window.days: must be at least 1
-Keep every issue updated within days [30]: Also keep unresolved issues updated within days [180]: config.yml: window.unresolved_days: must be at least window.days (60)
+Keep every issue updated within days [30]: window.days: must be at least 1
+Keep every issue updated within days [30]: Also keep unresolved issues updated within days [180]: window.unresolved_days: must be at least window.days (60)
 Also keep unresolved issues updated within days [180]: ✓ PLAT   1 issues in window
 ✓ INFRA  0 issues in window
 
 Runner labels [self-hosted]: invalid runner label "a b"
-Runner labels [self-hosted]: Cache branch [dev/jira-cache]: config.yml: cache_branch: must not be main
+Runner labels [self-hosted]: Cache branch [dev/jira-cache]: cache_branch: must not be main
+Cache branch [dev/jira-cache]: cache_branch: invalid branch name "bad..name"
 Cache branch [dev/jira-cache]: ` + "\n" + `No custom fields set on 1 recent issues.
 
 Wrote .jira-git-cache/config.yml
@@ -408,6 +412,7 @@ func TestRunKeepsExistingFilesAndBranch(t *testing.T) {
 	f.write(t, ".github/workflows/jira-sync.yaml", "custom\n")
 	gittest.Seed(t, f.remote, "cache/jira", map[string][]byte{"keep": []byte("me\n")})
 	f.opts.Dir = filepath.Join(f.dir, ".github")
+	f.opts.NonInteractive = false
 	f.opts.Answers = setup.Answers{}
 
 	out := f.mustRun(t)
@@ -547,14 +552,14 @@ func TestRunDefaultsToNoFieldsWhenNoneIsPreselected(t *testing.T) {
 	team.Fields["customfield_10500"] = map[string]any{"value": "Platform"}
 	f.jira.Put(team)
 	f.opts.NonInteractive = false
-	f.opts.Answers = setup.Answers{JiraURL: ptr(f.jira.URL), Projects: ptr("PLAT"), Days: ptr("1"), UnresolvedDays: ptr("1"),
+	f.opts.Answers = setup.Answers{JiraURL: ptr(f.jira.URL), Projects: ptr("PLAT"), Days: ptr(" 1 "), UnresolvedDays: ptr("1"),
 		RunnerLabels: ptr(""), CacheBranch: ptr(""), CreateBranch: ptr("false")}
 	f.opts.Stdin = strings.NewReader("\n")
 
 	out := f.mustRun(t)
 
 	for _, want := range []string{
-		"Keep every issue updated within days [30]: 1\n",
+		"Keep every issue updated within days [30]:  1\n",
 		"Custom fields set on 2 recent issues:\n",
 		"  1  customfield_10500  Team           1\nInclude which fields? [none]: \n",
 		"Skipped dev/jira-cache\n",
@@ -597,7 +602,8 @@ func TestRunFails(t *testing.T) {
 			`config.yml: jira_url: must be an absolute http or https URL with no query or fragment: "x"`},
 		{"missing url", func(_ *testing.T, f *fixture) { f.opts.Answers.JiraURL = nil }, "--jira-url is required with --non-interactive"},
 		{"bad url", func(_ *testing.T, f *fixture) { f.opts.Answers.JiraURL = ptr("ftp://jira") },
-			`config.yml: jira_url: must be an absolute http or https URL with no query or fragment: "ftp://jira"`},
+			`jira_url: must be an absolute http or https URL with no query or fragment: "ftp://jira"`},
+		{"url with two trailing slashes", func(_ *testing.T, f *fixture) { f.opts.Answers.JiraURL = ptr(f.jira.URL + "//") }, "jira_url: must not end in /"},
 		{"input ended", func(_ *testing.T, f *fixture) { f.opts.NonInteractive, f.opts.Answers = false, setup.Answers{} }, "setup: input ended"},
 		{"token unreadable", func(_ *testing.T, f *fixture) {
 			f.opts.NonInteractive, f.opts.Token = false, ""
@@ -609,19 +615,25 @@ func TestRunFails(t *testing.T) {
 		},
 			"GET /rest/api/2/serverInfo: 404: Not Found"},
 		{"missing projects", func(_ *testing.T, f *fixture) { f.opts.Answers.Projects = nil }, "--projects is required with --non-interactive"},
-		{"duplicate project", func(_ *testing.T, f *fixture) { f.opts.Answers.Projects = ptr("PLAT, plat") }, `config.yml: projects: duplicate key "PLAT"`},
+		{"duplicate project", func(_ *testing.T, f *fixture) { f.opts.Answers.Projects = ptr("PLAT, plat") }, `projects: duplicate key "PLAT"`},
 		{"days not a number", func(_ *testing.T, f *fixture) { f.opts.NonInteractive, f.opts.Answers.Days = false, ptr("x") },
 			`"x" is not a whole number of days`},
-		{"days above unresolved default", func(_ *testing.T, f *fixture) { f.opts.Answers.Days = ptr("181") },
-			"config.yml: window.unresolved_days: must be at least window.days (181)"},
+		{"unresolved below days", func(_ *testing.T, f *fixture) {
+			f.opts.Answers.Days, f.opts.Answers.UnresolvedDays = ptr("40"), ptr("39")
+		},
+			"window.unresolved_days: must be at least window.days (40)"},
 		{"unresolved not a number", func(_ *testing.T, f *fixture) { f.opts.Answers.UnresolvedDays = ptr("1.5") },
 			`"1.5" is not a whole number of days`},
 		{"unknown project", func(_ *testing.T, f *fixture) { f.opts.Answers.Projects = ptr("PLAT,PLATX") },
 			"PLATX: The value 'PLATX' does not exist for the field 'project'."},
 		{"count error without messages", func(_ *testing.T, f *fixture) { failOnce(f.jira, "/rest/api/2/search", "maxResults", "1") },
 			"PLAT: GET /rest/api/2/search: 404: Not Found"},
+		{"count error with messages", func(_ *testing.T, f *fixture) {
+			f.jira.Inject(jiramock.Fault{Path: "/rest/api/2/search", Status: http.StatusBadRequest,
+				Header: http.Header{"Content-Type": {"application/json"}}, Body: `{"errorMessages":["first","second"],"errors":{}}`})
+		}, "PLAT: first; second"},
 		{"runner label", func(_ *testing.T, f *fixture) { f.opts.Answers.RunnerLabels = ptr("a,,b") }, `invalid runner label ""`},
-		{"cache branch", func(_ *testing.T, f *fixture) { f.opts.Answers.CacheBranch = ptr("main") }, "config.yml: cache_branch: must not be main"},
+		{"cache branch", func(_ *testing.T, f *fixture) { f.opts.Answers.CacheBranch = ptr("main") }, "cache_branch: must not be main"},
 		{"sample search", func(_ *testing.T, f *fixture) { failOnce(f.jira, "/rest/api/2/search", "fields", "*all") },
 			"GET /rest/api/2/search: 404: Not Found"},
 		{"field list", func(_ *testing.T, f *fixture) { f.jira.Inject(jiramock.Fault{Path: "/rest/api/2/field", Status: 404}) },
@@ -662,5 +674,177 @@ func TestRunRejectsBadToken(t *testing.T) {
 	f.opts.Token = "wrong"
 	if err := f.run(t); !errors.Is(err, jira.ErrUnauthenticated) {
 		t.Errorf("got %v, want ErrUnauthenticated", err)
+	}
+}
+
+func customField(id int, name string) map[string]any {
+	return map[string]any{"id": fmt.Sprint("customfield_", id), "name": name, "custom": true,
+		"schema": map[string]any{"type": "string", "custom": "com.atlassian.jira.plugin.system.customfieldtypes:textfield"}}
+}
+
+func TestRunSuffixesNamesUntilUnique(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.jira.Fields = []map[string]any{customField(10600, "Team 10501"), customField(10500, "Team"), customField(10501, "Team")}
+	var issues []jiramock.Issue
+	for i, ids := range [][]string{{"10600", "10500", "10501"}, {"10600", "10500"}, {"10600"}} {
+		iss := jiramock.NewIssue(fmt.Sprint("PLAT-", i+1), 10001+i, jiramock.DefaultNow)
+		for _, id := range ids {
+			iss.Fields["customfield_"+id] = "x"
+		}
+		issues = append(issues, iss)
+	}
+	f.jira.Put(issues...)
+	f.opts.Answers.Fields = ptr("1-3")
+
+	f.mustRun(t)
+
+	want := `fields:
+  customfield_10600: team_10501
+  customfield_10500: team
+  customfield_10501: team_10501_10501
+`
+	if got := f.file(t, ".jira-git-cache/config.yml"); !strings.HasSuffix(got, want) {
+		t.Errorf("config.yml:\n%s", got)
+	}
+	if _, err := config.Load(f.dir); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestRunWritesNothingForInvalidAnswers(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		edit func(*fixture)
+		want string
+	}{
+		{"cache branch", func(f *fixture) { f.opts.Answers.CacheBranch = ptr("bad..name") }, `cache_branch: invalid branch name "bad..name"`},
+		{"field id", func(f *fixture) {
+			iss := jiramock.NewIssue("PLAT-1", 10001, jiramock.DefaultNow)
+			iss.Fields["customfield_x"] = "x"
+			f.jira.Put(iss)
+			f.opts.Answers.Fields = ptr("1")
+		}, `fields: invalid id "customfield_x"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t)
+			tc.edit(f)
+			if err := f.run(t); err == nil || err.Error() != tc.want {
+				t.Errorf("got %v, want %q", err, tc.want)
+			}
+			for _, dir := range []string{".jira-git-cache", ".github"} {
+				if _, err := os.Stat(filepath.Join(f.dir, dir)); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("%s: %v", dir, err)
+				}
+			}
+			if got := f.remoteBranches(t); got != "main" {
+				t.Errorf("remote branches: %s", got)
+			}
+		})
+	}
+}
+
+func TestRunCreateBranchAnswers(t *testing.T) {
+	t.Parallel()
+	for answer, want := range map[string]string{
+		"y": "main\nx", "Y": "main\nx", "yes": "main\nx", "true": "main\nx",
+		"n": "main", "no": "main", "false": "main", "FALSE": "main",
+	} {
+		t.Run(answer, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t)
+			f.opts.Answers.CacheBranch, f.opts.Answers.CreateBranch = ptr("x"), ptr(answer)
+			f.mustRun(t)
+			if got := f.remoteBranches(t); got != want {
+				t.Errorf("remote branches: %s", got)
+			}
+		})
+	}
+}
+
+func TestRunUsesLastLineWithoutNewline(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.opts.NonInteractive = false
+	f.opts.Answers = setup.Answers{JiraURL: ptr(f.jira.URL), Projects: ptr("PLAT"), Days: ptr(""), UnresolvedDays: ptr(""),
+		RunnerLabels: ptr(""), CacheBranch: ptr("")}
+	f.opts.Stdin = strings.NewReader("n")
+
+	if out := f.mustRun(t); !strings.Contains(out, "Skipped dev/jira-cache\n") {
+		t.Errorf("stdout:\n%s", out)
+	}
+}
+
+func TestRunRaisesUnresolvedDefaultToDays(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.opts.NonInteractive = false
+	f.opts.Answers = setup.Answers{JiraURL: ptr(f.jira.URL), Projects: ptr("PLAT"), Days: ptr("365"), UnresolvedDays: ptr(""),
+		RunnerLabels: ptr(""), CacheBranch: ptr(""), CreateBranch: ptr("")}
+
+	out := f.mustRun(t)
+
+	if want := "Also keep unresolved issues updated within days [365]:\n"; !strings.Contains(out, want) {
+		t.Errorf("stdout lacks %q:\n%s", want, out)
+	}
+	if got := f.file(t, ".jira-git-cache/config.yml"); !strings.Contains(got, "  days: 365\n  unresolved_days: 365\n") {
+		t.Errorf("config.yml:\n%s", got)
+	}
+}
+
+// cancelOnRead cancels a context when read, then blocks for a while.
+type cancelOnRead context.CancelFunc
+
+func (cancel cancelOnRead) Read([]byte) (int, error) {
+	cancel()
+	time.Sleep(5 * time.Second)
+	return 0, io.EOF
+}
+
+func TestRunStopsWaitingForInputWhenCancelled(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	f.opts.NonInteractive = false
+	f.opts.Answers = setup.Answers{}
+	f.opts.Stdin = cancelOnRead(cancel)
+
+	if err := setup.Run(ctx, f.opts); !errors.Is(err, context.Canceled) {
+		t.Errorf("got %v, want context.Canceled", err)
+	}
+}
+
+func TestRunCreatesFilesWithUsualModes(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.mustRun(t)
+
+	ref := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ref, "dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ref, "file"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mode := func(path string) os.FileMode {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info.Mode()
+	}
+	for path, want := range map[string]string{
+		".jira-git-cache":                  "dir",
+		".github":                          "dir",
+		".github/workflows":                "dir",
+		".jira-git-cache/config.yml":       "file",
+		".jira-git-cache/.gitignore":       "file",
+		".github/workflows/jira-sync.yaml": "file",
+	} {
+		if got, want := mode(filepath.Join(f.dir, path)), mode(filepath.Join(ref, want)); got != want {
+			t.Errorf("%s: mode %v, want %v", path, got, want)
+		}
 	}
 }

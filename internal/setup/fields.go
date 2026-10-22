@@ -18,7 +18,7 @@ import (
 const sampleSize = 100
 
 // SnakeName turns a Jira field name into a config name: "Story Points" → "story_points".
-// Runs of characters other than a-z and 0-9 become one underscore.
+// It lowercases the name, drops characters other than a-z and 0-9, and joins the remaining runs with underscores.
 func SnakeName(jiraName string) string {
 	var b strings.Builder
 	gap := false
@@ -84,7 +84,7 @@ func (s *session) chooseFields(ctx context.Context, client *jira.Client, project
 		return nil, nil
 	}
 	def := s.printFields(candidates, len(page.Issues))
-	chosen, err := askValid(s, fmt.Sprintf("Include which fields? [%s]: ", def), def, "fields", s.Answers.Fields,
+	chosen, err := askValid(ctx, s, fmt.Sprintf("Include which fields? [%s]: ", def), def, "fields", s.Answers.Fields,
 		func(v string) ([]int, error) { return ParseSelection(v, len(candidates)) })
 	if err != nil {
 		return nil, err
@@ -185,7 +185,7 @@ func configFields(candidates []candidate, chosen []int) config.Fields {
 		if name == "" || name[0] < 'a' {
 			name = "field_" + digits
 		}
-		if used[name] {
+		for used[name] {
 			name += "_" + digits
 		}
 		used[name] = true
