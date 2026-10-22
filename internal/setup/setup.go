@@ -331,11 +331,13 @@ func (s *session) countWindow(ctx context.Context, client *jira.Client, cfg conf
 		if err != nil {
 			return projectError(p, err)
 		}
-		counts[i] = textfmt.Count(page.Total)
-		keyW, countW = max(keyW, len(p)), max(countW, len(counts[i]))
+		counts[i] = textfmt.Issues(page.Total)
+		n, _, _ := strings.Cut(counts[i], " ")
+		keyW, countW = max(keyW, len(p)), max(countW, len(n))
 	}
 	for i, p := range cfg.Projects {
-		s.printf("✓ %-*s%*s issues in window\n", keyW+2, p, countW, counts[i])
+		n, noun, _ := strings.Cut(counts[i], " ")
+		s.printf("✓ %-*s%*s %s in window\n", keyW+2, p, countW, n, noun)
 	}
 	s.paragraph()
 	return nil

@@ -165,7 +165,7 @@ func TestPullRendersSnapshotFromSubdirectory(t *testing.T) {
 
 	assertFiles(t, cacheFiles(t, filepath.Join(f.dir, ".jira-git-cache")), render.Tree(s))
 	const want = "✓ .jira-git-cache/ now holds the snapshot fetched 2026-10-22T05:00:41Z (12m ago)\n" +
-		"  PLAT 1,204 issues, INFRA 387 issues, OLD 1 issues, ZED 0 issues\n"
+		"  PLAT 1,204 issues, INFRA 387 issues, OLD 1 issue, ZED 0 issues\n"
 	if got := f.stdout.String(); got != want {
 		t.Errorf("stdout:\n%s\nwant:\n%s", got, want)
 	}

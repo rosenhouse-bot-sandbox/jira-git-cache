@@ -54,6 +54,21 @@ func TestReportAlignsEachColumn(t *testing.T) {
 	}
 }
 
+func TestReportIssuesOfUnconfiguredProjects(t *testing.T) {
+	var b strings.Builder
+	r := syncer.Result{Projects: []syncer.ProjectStats{{Project: "A", InWindow: 1, Removed: 1}}, Fetched: 1, Removed: 4}
+
+	r.Report(&b, 0)
+
+	want := "" +
+		"A   1 in window: 0 new, 0 changed, 0 reused, 1 removed\n" +
+		"removed 3 issues of unconfigured projects\n" +
+		"fetched 1 issue in 0s\n"
+	if b.String() != want {
+		t.Errorf("Report =\n%s\nwant\n%s", b.String(), want)
+	}
+}
+
 func TestCommitMessage(t *testing.T) {
 	r := exampleResult()
 	r.Fetched, r.Reused, r.Removed = 37, 1554, 4

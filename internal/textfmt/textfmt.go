@@ -8,6 +8,14 @@ import (
 	"time"
 )
 
+// Issues formats n issues: 1 → "1 issue", 1204 → "1,204 issues".
+func Issues(n int) string {
+	if n == 1 {
+		return "1 issue"
+	}
+	return Count(n) + " issues"
+}
+
 // Count formats n >= 0 with comma thousands separators: 1204 → "1,204".
 func Count(n int) string {
 	s := strconv.Itoa(n)

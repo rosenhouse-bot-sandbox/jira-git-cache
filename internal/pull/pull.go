@@ -160,7 +160,7 @@ func report(w io.Writer, cfg config.Config, meta snapshot.Meta, age time.Duratio
 	var counts []string
 	for _, p := range order {
 		if m, ok := meta.Projects[p]; ok {
-			counts = append(counts, p+" "+textfmt.Count(m.Count)+" issues")
+			counts = append(counts, p+" "+textfmt.Issues(m.Count))
 		}
 	}
 	fmt.Fprintf(w, "  %s\n", strings.Join(counts, ", "))

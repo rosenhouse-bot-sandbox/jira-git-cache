@@ -365,7 +365,7 @@ Projects (comma-separated keys): projects: invalid key "1X"
 Projects (comma-separated keys): Keep every issue updated within days [30]: "x" is not a whole number of days
 Keep every issue updated within days [30]: window.days: must be at least 1
 Keep every issue updated within days [30]: Also keep unresolved issues updated within days [180]: window.unresolved_days: must be at least window.days (60)
-Also keep unresolved issues updated within days [180]: ✓ PLAT   1 issues in window
+Also keep unresolved issues updated within days [180]: ✓ PLAT   1 issue in window
 ✓ INFRA  0 issues in window
 
 Runner labels [self-hosted]: invalid runner label "a b"
@@ -420,7 +420,7 @@ func TestRunKeepsExistingFilesAndBranch(t *testing.T) {
 	want := `✓ Authenticated as svc-jira-cache on Jira Data Center 10.3.4
 
 ✓ INFRA  0 issues in window
-✓ PLAT   1 issues in window
+✓ PLAT   1 issue in window
 
 Kept .jira-git-cache/config.yml (already exists)
 Wrote .jira-git-cache/.gitignore
@@ -460,7 +460,7 @@ func TestRunWithExistingConfigAsksForMissingWorkflow(t *testing.T) {
 
 	want := `✓ Authenticated as svc on Jira Data Center 10.3.4
 
-✓ PLAT  1 issues in window
+✓ PLAT  1 issue in window
 
 Runner labels [self-hosted]: linux
 
