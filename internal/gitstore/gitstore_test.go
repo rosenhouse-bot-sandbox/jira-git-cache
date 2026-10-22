@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -503,6 +504,39 @@ func TestSecondFetchTransfersOnlyChangedObjects(t *testing.T) {
 	if added > 4 {
 		t.Errorf("second fetch added %d objects, want at most 4 (commit, two trees, one blob)", added)
 	}
+}
+
+func TestSecondPublishTransfersOnlyChangedObjects(t *testing.T) {
+	remote := gittest.Remote(t)
+	gittest.Run(t, remote, "config", "receive.unpackLimit", "1") // keep each push's pack
+	files := manyFiles(300)
+	first := publish(t, open(t, gittest.Clone(t, remote, "--depth", "1")), "cache", "", files)
+	writer := open(t, gittest.Clone(t, remote, "--depth", "1"))
+	fetch(t, writer, "cache")
+	before := packedObjects(t, remote)
+
+	files["PLAT/PLAT-7.json"] = []byte("changed\n")
+	publish(t, writer, "cache", first, files)
+
+	// The commit, two trees and a blob, plus the base that completes the thin pack.
+	if sent := packedObjects(t, remote) - before; sent > 5 {
+		t.Errorf("second publish sent %d objects, want at most 5", sent)
+	}
+}
+
+func packedObjects(t *testing.T, dir string) int {
+	t.Helper()
+	for line := range strings.Lines(gittest.Run(t, dir, "count-objects", "-v")) {
+		if n, ok := strings.CutPrefix(strings.TrimSpace(line), "in-pack: "); ok {
+			count, err := strconv.Atoi(n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return count
+		}
+	}
+	t.Fatal("count-objects printed no in-pack count")
+	return 0
 }
 
 func TestFetchSkipsHistoryBehindTip(t *testing.T) {
