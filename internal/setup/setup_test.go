@@ -255,7 +255,7 @@ func TestRunReproducesIssue2(t *testing.T) {
 	if got := gittest.Run(t, f.remote, "show", "dev/jira-cache:_meta/snapshot.json"); got != wantMeta {
 		t.Errorf("snapshot.json:\n%s", got)
 	}
-	if got := gittest.Run(t, f.remote, "log", "-1", "--format=%s %cI", "dev/jira-cache"); got != "setup: empty snapshot 2026-10-22T07:30:00+00:00" {
+	if got := gittest.Run(t, f.remote, "log", "-1", "--format=%s %ct", "dev/jira-cache"); got != fmt.Sprint("setup: empty snapshot ", now.Unix()) {
 		t.Errorf("commit: %s", got)
 	}
 }
