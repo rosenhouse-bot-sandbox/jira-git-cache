@@ -58,13 +58,30 @@ func TestForEachCancelsOthersAndReturnsFirstError(t *testing.T) {
 	}
 }
 
+func TestForEachStopsCallingAfterFirstError(t *testing.T) {
+	calls := 0
+
+	err := forEach(t.Context(), 1, make([]int, 100), func(context.Context, int) error {
+		calls++
+		return errors.New("boom")
+	})
+
+	if err == nil || calls != 1 {
+		t.Errorf("err = %v after %d calls, want an error after 1", err, calls)
+	}
+}
+
 func TestForEachReturnsParentCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
+	calls := 0
 
-	err := forEach(ctx, 1, []int{1}, func(context.Context, int) error { return nil })
+	err := forEach(ctx, 1, []int{1}, func(context.Context, int) error {
+		calls++
+		return nil
+	})
 
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("err = %v, want context.Canceled", err)
+	if !errors.Is(err, context.Canceled) || calls != 0 {
+		t.Errorf("err = %v after %d calls, want context.Canceled after 0", err, calls)
 	}
 }

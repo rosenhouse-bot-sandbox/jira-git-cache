@@ -56,7 +56,7 @@ func (f *fixture) put(at time.Time, keys ...string) {
 	}
 }
 
-// run syncs with opts, filling in Config, Jira, Now and ToolVersion when unset.
+// run syncs with opts against the mock. It fills in Config, Now and ToolVersion when they are unset.
 func (f *fixture) run(opts syncer.Options) (syncer.Result, error) {
 	if opts.Config.JiraURL == "" {
 		opts.Config = f.cfg
@@ -338,20 +338,31 @@ func TestRunIgnoresTimeZoneOfUpdated(t *testing.T) {
 
 func TestRunFullRefreshTriggers(t *testing.T) {
 	const age = 24*time.Hour - 5*time.Minute
-	for _, tc := range []struct {
+	type trigger struct {
 		name   string
 		change func(*syncer.Options)
 		want   string
-	}{
-		{"none", func(*syncer.Options) {}, ""},
+	}
+	byPriority := []trigger{
 		{"full flag", func(o *syncer.Options) { o.Full = true }, "--full"},
 		{"never full", func(o *syncer.Options) { o.Previous.Meta.LastFullAt = nil }, "no previous full refresh"},
 		{"schema", func(o *syncer.Options) { o.Previous.Meta.SchemaVersion = 0 }, "schema_version changed"},
 		{"fields", func(o *syncer.Options) { o.Config.Fields = o.Config.Fields[:0] }, "fields changed"},
 		{"jira url", func(o *syncer.Options) { o.Previous.Meta.JiraURL = "https://old.example.com" }, "jira_url changed"},
 		{"age at limit", func(o *syncer.Options) { o.Now = t0.Add(age) }, "last full refresh older than 24h"},
+	}
+	cases := []trigger{
+		{"none", func(*syncer.Options) {}, ""},
 		{"age below limit", func(o *syncer.Options) { o.Now = t0.Add(age - time.Millisecond) }, ""},
-	} {
+	}
+	for i, tc := range byPriority {
+		cases = append(cases, trigger{tc.name + " and later triggers", func(o *syncer.Options) {
+			for _, later := range byPriority[i:] {
+				later.change(o)
+			}
+		}, tc.want})
+	}
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t, "PLAT")
 			f.put(updated, "PLAT-1")
@@ -464,15 +475,19 @@ func TestRunRetriesRateLimit(t *testing.T) {
 }
 
 func TestRunFailsOnPersistentServerError(t *testing.T) {
-	f := newFixture(t, "PLAT")
-	f.put(updated, "PLAT-1", "PLAT-2")
-	f.jira.Inject(jiramock.Fault{Path: "/rest/api/2/issue/PLAT-2", Status: http.StatusServiceUnavailable})
+	for _, path := range []string{"/rest/api/2/issue/PLAT-2", "/rest/api/2/issue/PLAT-2/comment"} {
+		t.Run(path, func(t *testing.T) {
+			f := newFixture(t, "PLAT")
+			f.put(updated, "PLAT-1", "PLAT-2")
+			f.jira.Inject(jiramock.Fault{Path: path, Status: http.StatusServiceUnavailable})
 
-	_, err := f.run(syncer.Options{})
+			_, err := f.run(syncer.Options{})
 
-	var apiErr *jira.APIError
-	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusServiceUnavailable {
-		t.Errorf("err = %v, want 503", err)
+			var apiErr *jira.APIError
+			if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusServiceUnavailable {
+				t.Errorf("err = %v, want 503", err)
+			}
+		})
 	}
 }
 
@@ -531,18 +546,16 @@ func TestRunFails(t *testing.T) {
 	searchBody := func(key, fields string) string {
 		return `{"startAt":0,"maxResults":1000,"total":1,"issues":[{"id":"1","key":"` + key + `","fields":` + fields + `}]}`
 	}
-	for _, tc := range []struct {
+	type failure struct {
 		name  string
 		setup func(*fixture)
 		want  string
-	}{
+	}
+	cases := []failure{
 		{"fields", func(f *fixture) {
 			f.jira.Inject(jiramock.Fault{Path: "/rest/api/2/field", Status: http.StatusForbidden, Body: "{}"})
 		}, "/rest/api/2/field: 403"},
 		{"search", func(f *fixture) { f.cfg.Projects = []string{"NOPE"} }, "The value 'NOPE' does not exist"},
-		{"bad key", func(f *fixture) {
-			f.jira.Inject(jiramock.Fault{Path: searchPath, Status: http.StatusOK, Body: searchBody("plat-1", `{"updated":"2026-10-22T06:00:00.000+0000"}`)})
-		}, `invalid issue key "plat-1"`},
 		{"missing updated", func(f *fixture) {
 			f.jira.Inject(jiramock.Fault{Path: searchPath, Status: http.StatusOK, Body: searchBody("PLAT-1", `{}`)})
 		}, "PLAT-1: updated"},
@@ -554,7 +567,13 @@ func TestRunFails(t *testing.T) {
 			delete(iss.Fields, "summary")
 			f.jira.Put(iss)
 		}, "PLAT-1: missing summary"},
-	} {
+	}
+	for _, key := range []string{"plat-1", "PlAT-1", "xPLAT-1", "1PLAT-1", "PLAT-0", "PLAT-01", "PLAT-1x", "PLAT1"} {
+		cases = append(cases, failure{"bad key " + key, func(f *fixture) {
+			f.jira.Inject(jiramock.Fault{Path: searchPath, Status: http.StatusOK, Body: searchBody(key, `{"updated":"2026-10-22T06:00:00.000+0000"}`)})
+		}, `invalid issue key "` + key + `"`})
+	}
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t, "PLAT")
 			tc.setup(f)
