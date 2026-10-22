@@ -146,7 +146,7 @@ wrote /tmp/jira-preview (not pushed)
 ```
 
 **What happens:** `preview` does what `sync` does, then renders the result as `pull` would instead of pushing. It fetches the tip of `dev/jira-cache` first, so the counts approximate the next real run.
-`DIR` must be missing, empty, or an earlier preview.
+The target directory must be missing, empty, or an earlier preview.
 
 **Then:** browse `/tmp/jira-preview` as you would `.jira-git-cache/` below.
 

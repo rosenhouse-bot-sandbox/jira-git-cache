@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/rosenhouse-bot-sandbox/jira-git-cache/internal/gittest"
 )
 
 func files(t *testing.T, dir string) []string {
@@ -53,7 +55,14 @@ func TestPreviewReplacesEarlierPreview(t *testing.T) {
 	f := newSetUpFixture(t)
 	f.mustRun(t, "sync")
 	dir := filepath.Join(t.TempDir(), "preview")
+	status := gittest.Run(t, f.dir, "status", "--porcelain", "--ignored", "--untracked-files=all")
 	f.mustRun(t, "preview", dir)
+	if got := strings.Join(files(t, dir), " "); !strings.Contains(got, "PLAT/PLAT-2/issue.md") {
+		t.Errorf("files in %s: %s", dir, got)
+	}
+	if got := gittest.Run(t, f.dir, "status", "--porcelain", "--ignored", "--untracked-files=all"); got != status {
+		t.Errorf("wrote into the repo:\n%s", got)
+	}
 	f.jira.Delete("PLAT-2")
 
 	out := f.mustRun(t, "preview", "--full", dir)

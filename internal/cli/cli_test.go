@@ -1,10 +1,13 @@
 package cli_test
 
 import (
+	"context"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +34,16 @@ type fixture struct {
 	version string
 	prompts []string
 	stdin   string
+	ctx     context.Context // t.Context() when nil
+
+	requests atomic.Int64 // sent through Env.HTTP
+}
+
+type countingTransport struct{ n *atomic.Int64 }
+
+func (c countingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	c.n.Add(1)
+	return http.DefaultTransport.RoundTrip(r)
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -71,13 +84,18 @@ func (f *fixture) run(t *testing.T, args ...string) result {
 
 func (f *fixture) runIn(t *testing.T, dir string, args ...string) result {
 	t.Helper()
+	ctx := f.ctx
+	if ctx == nil {
+		ctx = t.Context()
+	}
 	var stdout, stderr strings.Builder
-	code := cli.Run(t.Context(), cli.Env{
+	code := cli.Run(ctx, cli.Env{
 		Stdin:  strings.NewReader(f.stdin),
 		Stdout: &stdout,
 		Stderr: &stderr,
 		Dir:    dir,
 		Getenv: func(k string) string { return f.env[k] },
+		HTTP:   &http.Client{Transport: countingTransport{&f.requests}},
 		Now: func() time.Time {
 			now := f.now
 			f.now = f.now.Add(f.tick)
@@ -172,15 +190,18 @@ func TestUsageErrors(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"version", "x"}, "version takes 0 arguments, got [x]"},
-		{[]string{"sync", "x"}, "sync takes 0 arguments, got [x]"},
+		{[]string{"help", "x"}, "help takes no arguments, got [x]"},
+		{[]string{"--help", "x"}, "--help takes no arguments, got [x]"},
+		{[]string{"version", "x"}, "version takes no arguments, got [x]"},
+		{[]string{"sync", "x"}, "sync takes no arguments, got [x]"},
 		{[]string{"sync", "--bogus"}, "flag provided but not defined: -bogus"},
 		{[]string{"pull", "--max-age", "2d"}, `invalid value "2d" for flag -max-age: parse error`},
-		{[]string{"pull", "x"}, "pull takes 0 arguments, got [x]"},
-		{[]string{"setup", "x"}, "setup takes 0 arguments, got [x]"},
-		{[]string{"preview"}, "preview takes 1 arguments, got []"},
-		{[]string{"preview", "a", "b"}, "preview takes 1 arguments, got [a b]"},
-		{[]string{"preview", "a", "--full"}, "preview takes 1 arguments, got [a --full]"},
+		{[]string{"pull", "--max-age", "-1ns"}, "--max-age must not be negative, got -1ns"},
+		{[]string{"pull", "x"}, "pull takes no arguments, got [x]"},
+		{[]string{"setup", "x"}, "setup takes no arguments, got [x]"},
+		{[]string{"preview"}, "preview takes DIR, got []"},
+		{[]string{"preview", "a", "b"}, "preview takes DIR, got [a b]"},
+		{[]string{"preview", "a", "--full"}, "preview takes DIR, got [a --full]"},
 	} {
 		r := f.run(t, tc.args...)
 		if r.code != 2 || r.stdout != "" || !strings.HasPrefix(r.stderr, "✗ "+tc.want+"\n\nUsage:") {
@@ -201,5 +222,32 @@ func TestVersionPrintsBuildVersion(t *testing.T) {
 	} {
 		f.version = build
 		wantResult(t, f.run(t, "version"), result{0, want + "\n", ""})
+	}
+}
+
+func TestCommandsUseEnvHTTP(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	for _, args := range [][]string{
+		{"setup", "--non-interactive", "--jira-url", f.jira.URL, "--projects", "PLAT"},
+		{"sync"},
+		{"preview", "out"},
+	} {
+		before := f.requests.Load()
+		f.mustRun(t, args...)
+		if f.requests.Load() == before {
+			t.Errorf("%q sent no requests through Env.HTTP", args)
+		}
+	}
+}
+
+func TestCommandsStopWhenContextEnds(t *testing.T) {
+	t.Parallel()
+	f := newSetUpFixture(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	f.ctx = ctx
+	for _, args := range [][]string{{"setup", "--non-interactive"}, {"sync"}, {"preview", "out"}, {"pull"}} {
+		wantResult(t, f.run(t, args...), result{1, "", "✗ git rev-parse --show-toplevel: context canceled\n"})
 	}
 }

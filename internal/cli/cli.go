@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/rosenhouse-bot-sandbox/jira-git-cache/internal/pull"
@@ -75,9 +76,12 @@ func dispatch(ctx context.Context, env Env, args []string) error {
 	}
 	switch name, args := args[0], args[1:]; name {
 	case "help", "-h", "--help":
+		if _, err := parse(flag.NewFlagSet(name, flag.ContinueOnError), args); err != nil {
+			return err
+		}
 		return flag.ErrHelp
 	case "version":
-		if _, err := parse(flag.NewFlagSet(name, flag.ContinueOnError), args, 0); err != nil {
+		if _, err := parse(flag.NewFlagSet(name, flag.ContinueOnError), args); err != nil {
 			return err
 		}
 		fmt.Fprintln(env.Stdout, env.toolVersion())
@@ -95,16 +99,20 @@ func dispatch(ctx context.Context, env Env, args []string) error {
 	}
 }
 
-// parse parses flags and returns exactly n positional arguments.
-func parse(fs *flag.FlagSet, args []string, n int) ([]string, error) {
+// parse parses flags and returns one positional argument per name.
+func parse(fs *flag.FlagSet, args []string, names ...string) ([]string, error) {
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); errors.Is(err, flag.ErrHelp) {
 		return nil, flag.ErrHelp
 	} else if err != nil {
 		return nil, usageError{err}
 	}
-	if fs.NArg() != n {
-		return nil, usageError{fmt.Errorf("%s takes %d arguments, got %v", fs.Name(), n, fs.Args())}
+	if fs.NArg() != len(names) {
+		want := "no arguments"
+		if len(names) > 0 {
+			want = strings.Join(names, " ")
+		}
+		return nil, usageError{fmt.Errorf("%s takes %s, got %v", fs.Name(), want, fs.Args())}
 	}
 	return fs.Args(), nil
 }

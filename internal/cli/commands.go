@@ -54,7 +54,7 @@ func (e Env) setup(ctx context.Context, args []string) error {
 			flags.String(name, "", "")
 		}
 	}
-	if _, err := parse(flags, args, 0); err != nil {
+	if _, err := parse(flags, args); err != nil {
 		return err
 	}
 	flags.Visit(func(f *flag.Flag) {
@@ -80,7 +80,7 @@ func (e Env) setup(ctx context.Context, args []string) error {
 func (e Env) sync(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("sync", flag.ContinueOnError)
 	full := flags.Bool("full", false, "")
-	if _, err := parse(flags, args, 0); err != nil {
+	if _, err := parse(flags, args); err != nil {
 		return err
 	}
 	token := e.Getenv("JIRA_TOKEN")
@@ -102,7 +102,7 @@ func (e Env) sync(ctx context.Context, args []string) error {
 func (e Env) preview(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("preview", flag.ContinueOnError)
 	full := flags.Bool("full", false, "")
-	positional, err := parse(flags, args, 1)
+	positional, err := parse(flags, args, "DIR")
 	if err != nil {
 		return err
 	}
@@ -171,8 +171,11 @@ func writeTree(dir string, tree map[string][]byte) error {
 func (e Env) pull(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("pull", flag.ContinueOnError)
 	maxAge := flags.Duration("max-age", 0, "")
-	if _, err := parse(flags, args, 0); err != nil {
+	if _, err := parse(flags, args); err != nil {
 		return err
+	}
+	if *maxAge < 0 {
+		return usageError{fmt.Errorf("--max-age must not be negative, got %v", *maxAge)}
 	}
 	return pull.Run(ctx, pull.Options{
 		Dir:         e.Dir,
@@ -215,19 +218,19 @@ func (e Env) runSyncer(ctx context.Context, full bool, token string) (synced, er
 	if err != nil && s.lease != "" {
 		fmt.Fprintf(e.Stderr, "warning: previous snapshot unreadable (%v); fetching everything\n", err)
 	}
-	s.result, err = syncer.Run(ctx, syncer.Options{
+	opts := syncer.Options{
 		Config:      s.cfg,
 		Jira:        &jira.Client{BaseURL: s.cfg.JiraURL, Token: token, HTTP: e.HTTP},
 		Previous:    previous,
 		Full:        full,
 		Now:         s.start,
 		ToolVersion: e.toolVersion(),
-	})
-	if err != nil {
-		return s, err
 	}
-	if reason := s.result.FullRefreshReason; reason != "" {
+	if reason := syncer.FullRefreshReason(opts); reason != "" {
 		fmt.Fprintf(e.Stdout, "full refresh: %s\n", reason)
+	}
+	if s.result, err = syncer.Run(ctx, opts); err != nil {
+		return s, err
 	}
 	s.result.Report(e.Stdout, e.Now().Sub(s.start))
 	for _, key := range s.result.Skipped {

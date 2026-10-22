@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -70,6 +71,9 @@ func TestSetupInteractiveReadsStdinAndPassword(t *testing.T) {
 func TestSetupPinsBuildVersion(t *testing.T) {
 	t.Parallel()
 	f := newSetUpFixture(t)
+	if got := gittest.Run(t, f.remote, "log", "-1", "--format=%ct", "dev/jira-cache"); got != strconv.FormatInt(f.now.Unix(), 10) {
+		t.Errorf("commit time %s, want %d", got, f.now.Unix())
+	}
 	if got := f.read(t, ".github/workflows/jira-sync.yaml"); !strings.Contains(got, "/cmd/jira-git-cache@v0.1.0\n") {
 		t.Errorf("workflow:\n%s", got)
 	}

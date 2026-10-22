@@ -112,10 +112,6 @@ func TestSyncFailures(t *testing.T) {
 			func(_ *testing.T, f *fixture) { delete(f.env, "JIRA_TOKEN") },
 			"✗ JIRA_TOKEN is not set\n",
 		},
-		"bad token": {
-			func(_ *testing.T, f *fixture) { f.env["JIRA_TOKEN"] = "wrong" },
-			"✗ check token: GET /rest/api/2/myself: 401 Unauthorized: Jira rejected the token (invalid or expired)\n",
-		},
 		"no config": {
 			func(t *testing.T, f *fixture) { gittest.Run(t, f.dir, "clean", "-fdxq") },
 			"✗ no .jira-git-cache/config.yml in this repo; run jira-git-cache setup, or use a clone of a cache repo\n",
@@ -145,4 +141,12 @@ func TestSyncFailures(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSyncReportsFullRefreshBeforeFetching(t *testing.T) {
+	t.Parallel()
+	f := newSetUpFixture(t)
+	f.env["JIRA_TOKEN"] = "wrong"
+	wantResult(t, f.run(t, "sync"), result{1, "full refresh: no previous full refresh\n",
+		"✗ check token: GET /rest/api/2/myself: 401 Unauthorized: Jira rejected the token (invalid or expired)\n"})
 }

@@ -18,10 +18,10 @@ import (
 )
 
 func main() {
-	os.Exit(run())
+	os.Exit(run(os.Args[1:]))
 }
 
-func run() int {
+func run(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	dir, err := os.Getwd()
@@ -41,22 +41,43 @@ func run() int {
 		Getenv:       os.Getenv,
 		HTTP:         &http.Client{Timeout: 60 * time.Second},
 		Now:          time.Now,
-		ReadPassword: readPassword,
+		ReadPassword: readPassword(ctx),
 		BuildVersion: buildVersion,
-	}, os.Args[1:])
+	}, args)
 }
 
-// readPassword prompts on stderr and reads a line from the terminal without echo.
-func readPassword(prompt string) (string, error) {
-	fd := int(os.Stdin.Fd()) //nolint:gosec // File descriptors fit in an int.
-	if !term.IsTerminal(fd) {
-		return "", errors.New("stdin is not a terminal; set JIRA_TOKEN")
+// readPassword prompts on stderr and reads a line from the terminal without echo, until ctx ends.
+func readPassword(ctx context.Context) func(string) (string, error) {
+	return func(prompt string) (string, error) {
+		fd := int(os.Stdin.Fd()) //nolint:gosec // File descriptors fit in an int.
+		if !term.IsTerminal(fd) {
+			return "", errors.New("stdin is not a terminal; set JIRA_TOKEN")
+		}
+		state, err := term.GetState(fd)
+		if err != nil {
+			return "", fmt.Errorf("read password: %w", err)
+		}
+		fmt.Fprint(os.Stderr, prompt)
+		type line struct {
+			token []byte
+			err   error
+		}
+		read := make(chan line, 1)
+		go func() {
+			token, err := term.ReadPassword(fd)
+			read <- line{token, err}
+		}()
+		select {
+		case <-ctx.Done():
+			_ = term.Restore(fd, state)
+			fmt.Fprintln(os.Stderr)
+			return "", ctx.Err()
+		case l := <-read:
+			fmt.Fprintln(os.Stderr)
+			if l.err != nil {
+				return "", fmt.Errorf("read password: %w", l.err)
+			}
+			return string(l.token), nil
+		}
 	}
-	fmt.Fprint(os.Stderr, prompt)
-	token, err := term.ReadPassword(fd)
-	fmt.Fprintln(os.Stderr)
-	if err != nil {
-		return "", fmt.Errorf("read password: %w", err)
-	}
-	return string(token), nil
 }
