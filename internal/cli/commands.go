@@ -241,6 +241,10 @@ func (e Env) runSyncer(ctx context.Context, full bool, token string) (synced, er
 		return s, err
 	}
 	previous, err := snapshot.Decode(files)
+	if errors.Is(err, snapshot.ErrNotSnapshot) && s.lease != "" {
+		return s, fmt.Errorf("%s on origin has no _meta/snapshot.json, so it is not a cache; refusing to replace it. "+
+			"Set cache_branch to an unused branch, or delete this one", s.cfg.CacheBranch)
+	}
 	if err != nil && s.lease != "" {
 		fmt.Fprintf(e.Stderr, "warning: previous snapshot unreadable (%v); fetching everything\n", err)
 	}

@@ -259,7 +259,7 @@ func TestDecodeEmptySnapshot(t *testing.T) {
 
 func TestDecodeRequiresSnapshotJSON(t *testing.T) {
 	_, err := snapshot.Decode(map[string][]byte{"PLAT/PLAT-1.json": []byte("{}")})
-	if err == nil || err.Error() != "not a jira-git-cache snapshot" {
+	if !errors.Is(err, snapshot.ErrNotSnapshot) {
 		t.Errorf("err = %v", err)
 	}
 }
