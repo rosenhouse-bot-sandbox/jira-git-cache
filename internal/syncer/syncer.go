@@ -61,7 +61,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("list fields: %w", err)
 	}
-	r := Result{FullRefreshReason: fullRefreshReason(opts)}
+	r := Result{FullRefreshReason: FullRefreshReason(opts)}
 	full := r.FullRefreshReason != ""
 	entries, err := enumerate(ctx, opts.Jira, cfg)
 	if err != nil {
@@ -155,7 +155,8 @@ func (r *Result) diff(projects []string, entries []enumerated, prev map[string]s
 	return reused, fetch
 }
 
-func fullRefreshReason(opts Options) string {
+// FullRefreshReason says why Run will refetch every issue, or returns "".
+func FullRefreshReason(opts Options) string {
 	m, cfg := opts.Previous.Meta, opts.Config
 	every := time.Duration(cfg.FullRefreshEvery)
 	if opts.Full {
