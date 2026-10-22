@@ -1,0 +1,5 @@
+unleash:
+  exclude-files:
+    - "^cmd/"
+    - "^internal/gittest/"
+  timeout-coefficient: 10
