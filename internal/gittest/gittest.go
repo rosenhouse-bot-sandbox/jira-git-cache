@@ -9,12 +9,20 @@ import (
 	"testing"
 )
 
-// Isolate points git at an empty config and a temporary HOME, and fixes the
-// author and committer. Call it from TestMain and run the returned cleanup.
+// Isolate clears inherited GIT_* variables, points git at an empty config and
+// a temporary HOME, and fixes the author and committer. Call it from TestMain
+// and run the returned cleanup.
 func Isolate() (cleanup func()) {
 	home, err := os.MkdirTemp("", "gittest-home-")
 	if err != nil {
 		panic(err)
+	}
+	for _, kv := range os.Environ() {
+		if name, _, _ := strings.Cut(kv, "="); strings.HasPrefix(name, "GIT_") {
+			if err := os.Unsetenv(name); err != nil {
+				panic(err)
+			}
+		}
 	}
 	env := map[string]string{
 		"GIT_CONFIG_GLOBAL":   os.DevNull,
