@@ -615,6 +615,24 @@ func TestNotIgnoredPathOutsideRepoFails(t *testing.T) {
 	}
 }
 
+func TestTracked(t *testing.T) {
+	clone := gittest.Clone(t, gittest.Remote(t))
+	repo := open(t, clone)
+	if err := os.WriteFile(filepath.Join(clone, "staged"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gittest.Run(t, clone, "add", "staged")
+	for path, want := range map[string]bool{"README.md": true, "staged": true, "untracked": false} {
+		if got, err := repo.Tracked(context.Background(), path); err != nil || got != want {
+			t.Errorf("Tracked(%q) = %v, %v; want %v", path, got, err, want)
+		}
+	}
+	var gitErr *gitstore.Error
+	if _, err := repo.Tracked(context.Background(), "../outside"); !errors.As(err, &gitErr) {
+		t.Errorf("err = %v, want *gitstore.Error", err)
+	}
+}
+
 // stubGit puts a git on PATH that runs script, and returns a file the stub
 // creates once it is running.
 func stubGit(t *testing.T, script string) (started string) {

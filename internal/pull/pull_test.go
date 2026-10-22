@@ -378,6 +378,22 @@ func TestPullRefusesUnignoredPaths(t *testing.T) {
 	}
 }
 
+func TestPullRefusesTrackedPaths(t *testing.T) {
+	f := newFixture(t, defaultMain())
+	f.seed(t, synced(&fetchedAt, map[string]int{"PLAT": 1}, "PLAT-1"))
+	f.mustRun(t)
+	gittest.Run(t, f.dir, "add", "--force", ".jira-git-cache/PLAT/PLAT-1/issue.md")
+
+	err := f.run(t)
+
+	const want = ".jira-git-cache/PLAT/PLAT-1/issue.md is tracked; untrack it with: git rm -r --cached ':/.jira-git-cache/PLAT/PLAT-1/issue.md'"
+	if err == nil || err.Error() != want {
+		t.Fatalf("got %v, want %s", err, want)
+	}
+	gittest.Run(t, filepath.Join(f.dir, ".jira-git-cache"), "rm", "-r", "--quiet", "--cached", ":/.jira-git-cache/PLAT/PLAT-1/issue.md")
+	f.mustRun(t)
+}
+
 func TestPullFetchFailureLeavesCacheAlone(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -465,6 +481,28 @@ func TestPullWarnsWhenSnapshotToolIsNewer(t *testing.T) {
 			s.Meta.ToolVersion = tc.theirs
 			f.seed(t, s)
 			f.opts.ToolVersion = tc.ours
+
+			f.mustRun(t)
+
+			if got := f.stderr.String(); got != tc.warning {
+				t.Errorf("stderr %q, want %q", got, tc.warning)
+			}
+		})
+	}
+}
+
+func TestPullWarnsWhenSnapshotIsFromTheFuture(t *testing.T) {
+	for _, tc := range []struct {
+		ahead   time.Duration
+		warning string
+	}{
+		{5 * time.Minute, ""},
+		{5*time.Minute + time.Second, "warning: the snapshot's fetched_at 2026-10-22T05:00:41Z is 5m ahead of this machine's clock; check the runner's clock\n"},
+	} {
+		t.Run(tc.ahead.String(), func(t *testing.T) {
+			f := newFixture(t, defaultMain())
+			f.seed(t, synced(&fetchedAt, nil))
+			f.opts.Now = fetchedAt.Add(-tc.ahead)
 
 			f.mustRun(t)
 

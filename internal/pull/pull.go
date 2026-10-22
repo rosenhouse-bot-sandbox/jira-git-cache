@@ -29,6 +29,7 @@ const (
 	pulledRef  = "refs/jira-git-cache/pulled"
 	timeLayout = "2006-01-02T15:04:05Z"
 	upgrade    = "upgrade: go install github.com/rosenhouse-bot-sandbox/jira-git-cache/cmd/jira-git-cache@latest"
+	clockSkew  = 5 * time.Minute // tolerated before warning that fetched_at is in the future
 )
 
 var projectKey = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
@@ -138,6 +139,10 @@ func Run(ctx context.Context, opts Options) error {
 	if meta.FetchedAt != nil {
 		age = opts.Now.Sub(*meta.FetchedAt)
 	}
+	if -age > clockSkew {
+		fmt.Fprintf(opts.Stderr, "warning: the snapshot's fetched_at %s is %s ahead of this machine's clock; check the runner's clock\n",
+			meta.FetchedAt.UTC().Format(timeLayout), textfmt.Age(-age))
+	}
 	if opts.MaxAge > 0 && (meta.FetchedAt == nil || age > opts.MaxAge) {
 		return &StaleError{FetchedAt: meta.FetchedAt, Age: age, MaxAge: opts.MaxAge, Branch: cfg.CacheBranch}
 	}
@@ -199,10 +204,16 @@ func (c cache) requireIgnored(ctx context.Context, names []string) error {
 	if err != nil {
 		return err
 	}
-	if len(notIgnored) > 0 {
-		return fmt.Errorf("%s/.gitignore does not ignore %s; restore it from setup", c.git, notIgnored[0])
+	if len(notIgnored) == 0 {
+		return nil
 	}
-	return nil
+	p := notIgnored[0]
+	if tracked, err := c.repo.Tracked(ctx, p); err != nil {
+		return err
+	} else if tracked {
+		return fmt.Errorf("%s is tracked; untrack it with: git rm -r --cached ':/%s'", p, p)
+	}
+	return fmt.Errorf("%s/.gitignore does not ignore %s; restore it from setup", c.git, p)
 }
 
 // install writes tree into a temporary directory, moves each top-level entry

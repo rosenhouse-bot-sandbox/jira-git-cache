@@ -222,6 +222,15 @@ func (r *Repo) NotIgnored(ctx context.Context, paths []string) ([]string, error)
 	return unlisted(paths, out), nil
 }
 
+// Tracked reports whether the index holds path.
+func (r *Repo) Tracked(ctx context.Context, path string) (bool, error) {
+	_, err := r.git(ctx, "", nil, "ls-files", "--error-unmatch", "--", path)
+	if exitedWith(err, 1) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // unlisted returns the paths missing from a NUL-separated list.
 func unlisted(paths []string, list string) []string {
 	listed := map[string]bool{}
