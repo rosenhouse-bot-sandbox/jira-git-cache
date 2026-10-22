@@ -285,6 +285,7 @@ func TestDecodeRejectsBadMeta(t *testing.T) {
 		`{"schema_version":1,"projects":[]}`,
 		`{"schema_version":1,"fetched_at":"2026-10-22 05:00:41"}`,
 		`{"schema_version":1,"last_full_at":"2026-10-22T05:00:41+02:00"}`,
+		`{"schema_version":1,"fetched_at":"2026-10-22T05:00:41.5Z"}`,
 	} {
 		_, err := snapshot.Decode(map[string][]byte{"_meta/snapshot.json": []byte(meta)})
 		var newer *snapshot.NewerSchemaError

@@ -56,7 +56,7 @@ func FieldsFromJira(fs []jira.Field) []Field {
 		}
 	}
 	slices.SortFunc(out, func(a, b Field) int {
-		return compareNumbers(strings.TrimPrefix(a.ID, "customfield_"), strings.TrimPrefix(b.ID, "customfield_"))
+		return compareNumbers(a.ID, b.ID)
 	})
 	return out
 }

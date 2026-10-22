@@ -23,7 +23,7 @@ type User struct {
 
 // Link is an issue link, seen from the issue that holds it.
 type Link struct {
-	Relation string `json:"relation"` // such as "blocks" or "is blocked by"
+	Relation string `json:"relation"`
 	Key      string `json:"key"`
 }
 
@@ -37,6 +37,8 @@ type Comment struct {
 }
 
 // Issue is one normalized issue. Times are UTC with milliseconds.
+// Custom is keyed by configured name, and an unset value is null.
+// Comments are sorted by created time, then numeric id.
 type Issue struct {
 	ID          string         `json:"id"`
 	Key         string         `json:"key"`
@@ -53,8 +55,8 @@ type Issue struct {
 	Created     string         `json:"created"`
 	Updated     string         `json:"updated"`
 	Description *string        `json:"description"`
-	Custom      map[string]any `json:"custom"`   // by configured name; null when unset
-	Comments    []Comment      `json:"comments"` // sorted by created, then numeric id
+	Custom      map[string]any `json:"custom"`
+	Comments    []Comment      `json:"comments"`
 }
 
 type named struct {
@@ -65,42 +67,48 @@ type issueRef struct {
 	Key string `json:"key"`
 }
 
+type link struct {
+	Type struct {
+		Inward  string `json:"inward"`
+		Outward string `json:"outward"`
+	} `json:"type"`
+	InwardIssue  *issueRef `json:"inwardIssue"`
+	OutwardIssue *issueRef `json:"outwardIssue"`
+}
+
 type wireFields struct {
-	Summary    *string    `json:"summary"`
-	Status     *named     `json:"status"`
-	Resolution *named     `json:"resolution"`
-	IssueType  *named     `json:"issuetype"`
-	Priority   *named     `json:"priority"`
-	Assignee   *jira.User `json:"assignee"`
-	Reporter   *jira.User `json:"reporter"`
-	Labels     []string   `json:"labels"`
-	Parent     *issueRef  `json:"parent"`
-	IssueLinks []struct {
-		Type struct {
-			Inward  string `json:"inward"`
-			Outward string `json:"outward"`
-		} `json:"type"`
-		InwardIssue  *issueRef `json:"inwardIssue"`
-		OutwardIssue *issueRef `json:"outwardIssue"`
-	} `json:"issuelinks"`
-	Created     *string `json:"created"`
-	Updated     *string `json:"updated"`
-	Description *string `json:"description"`
+	Summary     *string
+	Status      *named
+	Resolution  *named
+	IssueType   *named
+	Priority    *named
+	Assignee    *jira.User
+	Reporter    *jira.User
+	Labels      []string
+	Parent      *issueRef
+	IssueLinks  []link
+	Created     *string
+	Updated     *string
+	Description *string
 }
 
 // FromJira normalizes an issue and its comments. customNames maps custom field ids to configured names.
 func FromJira(iss jira.Issue, comments []jira.Comment, customNames map[string]string) (Issue, error) {
-	system := map[string]json.RawMessage{}
-	for _, id := range SystemFields {
-		system[id] = iss.Fields[id]
-	}
-	raw, err := json.Marshal(system)
-	if err != nil {
-		return Issue{}, fmt.Errorf("%s: %w", iss.Key, err)
-	}
 	var w wireFields
-	if err := json.Unmarshal(raw, &w); err != nil {
-		return Issue{}, fmt.Errorf("%s: %w", iss.Key, err)
+	targets := map[string]any{
+		"summary": &w.Summary, "status": &w.Status, "resolution": &w.Resolution, "issuetype": &w.IssueType,
+		"priority": &w.Priority, "assignee": &w.Assignee, "reporter": &w.Reporter, "labels": &w.Labels,
+		"parent": &w.Parent, "issuelinks": &w.IssueLinks, "created": &w.Created, "updated": &w.Updated,
+		"description": &w.Description,
+	}
+	for _, id := range SystemFields {
+		raw, ok := iss.Fields[id]
+		if !ok {
+			continue
+		}
+		if err := json.Unmarshal(raw, targets[id]); err != nil {
+			return Issue{}, fmt.Errorf("%s: %s: %w", iss.Key, id, err)
+		}
 	}
 	status, typ := nameOf(w.Status), nameOf(w.IssueType)
 	for _, r := range []struct {
@@ -223,8 +231,8 @@ func normalize(v any) any {
 func normalizeObject(o map[string]any) any {
 	hasValueKey := false
 	for _, k := range valueKeys {
-		v, ok := o[k]
-		hasValueKey = hasValueKey || ok
+		v := o[k]
+		hasValueKey = hasValueKey || v != nil
 		s, ok := v.(string)
 		if !ok {
 			continue
@@ -262,7 +270,9 @@ func sprintName(s string) string {
 }
 
 // sprintSegments splits a dump body into "key=value" segments.
-// A repeated key right after goal is goal's free text, so it is merged back into goal.
+// Goal's free text can fake keys, so goal extends up to the longest tail with no repeated key.
+// In 10.x order, that tail holds the real keys after goal.
+// In 8.x order, the real name comes before goal, and sprintName takes the first name.
 func sprintSegments(body string) []string {
 	var parts []string
 	start := 0
@@ -272,22 +282,17 @@ func sprintSegments(body string) []string {
 	}
 	parts = append(parts, body[start:])
 
-	count := map[string]int{}
-	for _, p := range parts {
-		count[segmentKey(p)]++
+	goal := slices.IndexFunc(parts, func(p string) bool { return segmentKey(p) == "goal" })
+	if goal < 0 {
+		return parts
 	}
-	var out []string
-	inGoal := false
-	for _, p := range parts {
-		k := segmentKey(p)
-		if inGoal && count[k] > 1 {
-			out[len(out)-1] += "," + p
-			continue
-		}
-		out = append(out, p)
-		inGoal = k == "goal"
+	seen := map[string]bool{"goal": true}
+	tail := len(parts)
+	for !seen[segmentKey(parts[tail-1])] {
+		seen[segmentKey(parts[tail-1])] = true
+		tail--
 	}
-	return out
+	return slices.Concat(parts[:goal], []string{strings.Join(parts[goal:tail], ",")}, parts[tail:])
 }
 
 func segmentKey(seg string) string {

@@ -137,6 +137,34 @@ func TestFromJiraDropsLinkWithoutIssue(t *testing.T) {
 	}
 }
 
+func TestFromJiraReadsInwardLinkRelation(t *testing.T) {
+	m := jiramock.NewIssue("PLAT-7", 10007, updated)
+	m.Fields["issuelinks"] = []any{map[string]any{
+		"type":        map[string]any{"inward": "is blocked by", "outward": "blocks"},
+		"inwardIssue": map[string]any{"key": "PLAT-1"},
+	}}
+	iss, _ := fromMock(t, m)
+
+	got, err := snapshot.FromJira(iss, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []snapshot.Link{{Relation: "is blocked by", Key: "PLAT-1"}}; !reflect.DeepEqual(got.Links, want) {
+		t.Errorf("Links = %v, want %v", got.Links, want)
+	}
+}
+
+func TestFromJiraNamesMalformedSystemField(t *testing.T) {
+	m := jiramock.NewIssue("PLAT-7", 10007, updated)
+	m.Fields["issuelinks"] = map[string]any{}
+	iss, _ := fromMock(t, m)
+
+	_, err := snapshot.FromJira(iss, nil, nil)
+	if err == nil || !strings.HasPrefix(err.Error(), "PLAT-7: issuelinks: ") || strings.Contains(err.Error(), "struct") {
+		t.Errorf("err = %v", err)
+	}
+}
+
 func TestFromJiraRejectsMissingOrMalformedRequiredFields(t *testing.T) {
 	for _, tc := range []struct {
 		field string
@@ -258,11 +286,15 @@ func TestFromJiraNormalizesCustomValues(t *testing.T) {
 		{`{"self":"x","value":"Platform","id":"10401"}`, "Platform"},
 		{`{"value":"Hardware","child":{"value":"Disk","id":"2"}}`, "Hardware > Disk"},
 		{`{"value":"Hardware","child":{"id":"2"}}`, "Hardware"},
+		{`{"name":"n","child":{"value":"c"}}`, "n"},
+		{`{"displayName":"Jane Doe","child":{"value":"x"}}`, "Jane Doe"},
 		{`{"displayName":"Jane Doe","name":"jdoe","key":"JIRAUSER1"}`, "Jane Doe"},
 		{`{"name":"jdoe","key":"JIRAUSER1"}`, "jdoe"},
 		{`{"key":"JIRAUSER1"}`, "JIRAUSER1"},
 		{`{"value":7,"name":"seven"}`, "seven"},
 		{`{"hasEpicLinkFieldDependency":false,"showField":false,"nonEditableReason":{"reason":"X"}}`, nil},
+		{`{"showField":false,"value":null}`, nil},
+		{`{"value":null}`, map[string]any{"value": nil}},
 		{`{"showField":false,"name":5}`, map[string]any{"showField": false, "name": 5.0}},
 		{`{"showField":true}`, map[string]any{"showField": true}},
 		{`{"id":15279,"state":"closed"}`, map[string]any{"id": 15279.0, "state": "closed"}},
@@ -299,7 +331,8 @@ func sprintName(t *testing.T, dump string) any {
 
 func TestFromJiraReadsSprintNames(t *testing.T) {
 	for _, name := range []string{"Sprint 42", "Team A, Sprint 3", "Team | Sprint 3", "a=b,c"} {
-		for _, goal := range []string{"", "Ship it", "line one\r\nline two,\nline three", "Fix x,name=Bogus", "a,id=1,name=Bogus,state=X"} {
+		for _, goal := range []string{"", "Ship it", "line one\r\nline two,\nline three", "Fix x,name=Bogus", "a,id=1,name=Bogus,state=X",
+			"a,id=1,incompleteIssuesDestinationId=2,name=Bogus", "a,autoStartStop=x,name=Bogus"} {
 			for order, dump := range map[string]string{
 				"8.x":  jiramock.Sprint8x(42, name, "ACTIVE", goal),
 				"10.x": jiramock.Sprint10x(42, name, "ACTIVE", goal),
@@ -309,6 +342,23 @@ func TestFromJiraReadsSprintNames(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestFromJiraSplitsSprintNameAtEveryKnownKey(t *testing.T) {
+	for _, k := range []string{"activatedDate", "autoStartStop", "completeDate", "endDate", "goal", "id",
+		"incompleteIssuesDestinationId", "name", "rapidViewId", "sequence", "startDate", "state", "synced"} {
+		dump := "com.atlassian.greenhopper.service.sprint.Sprint@1a2b[name=Real," + k + "=x]"
+		if got := sprintName(t, dump); got != "Real" {
+			t.Errorf("%s: got %q", k, got)
+		}
+	}
+}
+
+func TestFromJiraReadsSprintNameAfterLeadingGoal(t *testing.T) {
+	dump := "com.atlassian.greenhopper.service.sprint.Sprint@1a2b[goal=x,name=Bogus,name=Real]"
+	if got := sprintName(t, dump); got != "Real" {
+		t.Errorf("got %q", got)
 	}
 }
 

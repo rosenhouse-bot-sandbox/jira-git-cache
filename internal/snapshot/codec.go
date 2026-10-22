@@ -27,12 +27,13 @@ type ProjectMeta struct {
 }
 
 // Meta is _meta/snapshot.json. Times are stored in UTC to the second.
+// SchemaVersion is the number found on the branch.
 type Meta struct {
 	FetchedAt     *time.Time // nil means never synced
 	LastFullAt    *time.Time
 	JiraURL       string
 	Projects      map[string]ProjectMeta
-	SchemaVersion int // as found on the branch
+	SchemaVersion int
 	ToolVersion   string
 	FieldsHash    string
 }
@@ -139,6 +140,9 @@ func parseMetaTime(s *string) (*time.Time, error) {
 	t, err := time.Parse(metaTimeLayout, *s)
 	if err != nil {
 		return nil, fmt.Errorf("parse time: %w", err)
+	}
+	if t.Format(metaTimeLayout) != *s {
+		return nil, fmt.Errorf("time %q is not in UTC to the second", *s)
 	}
 	return &t, nil
 }
