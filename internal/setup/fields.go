@@ -185,7 +185,7 @@ func configFields(candidates []candidate, chosen []int) config.Fields {
 		if name == "" || name[0] < 'a' {
 			name = "field_" + digits
 		}
-		for used[name] {
+		for used[name] || config.IsBuiltinName(name) {
 			name += "_" + digits
 		}
 		used[name] = true

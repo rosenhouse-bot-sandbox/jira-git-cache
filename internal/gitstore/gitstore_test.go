@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -505,6 +506,39 @@ func TestSecondFetchTransfersOnlyChangedObjects(t *testing.T) {
 	}
 }
 
+func TestSecondPublishTransfersOnlyChangedObjects(t *testing.T) {
+	remote := gittest.Remote(t)
+	gittest.Run(t, remote, "config", "receive.unpackLimit", "1") // keep each push's pack
+	files := manyFiles(300)
+	first := publish(t, open(t, gittest.Clone(t, remote, "--depth", "1")), "cache", "", files)
+	writer := open(t, gittest.Clone(t, remote, "--depth", "1"))
+	fetch(t, writer, "cache")
+	before := packedObjects(t, remote)
+
+	files["PLAT/PLAT-7.json"] = []byte("changed\n")
+	publish(t, writer, "cache", first, files)
+
+	// The commit, two trees and a blob, plus the base that completes the thin pack.
+	if sent := packedObjects(t, remote) - before; sent > 5 {
+		t.Errorf("second publish sent %d objects, want at most 5", sent)
+	}
+}
+
+func packedObjects(t *testing.T, dir string) int {
+	t.Helper()
+	for line := range strings.Lines(gittest.Run(t, dir, "count-objects", "-v")) {
+		if n, ok := strings.CutPrefix(strings.TrimSpace(line), "in-pack: "); ok {
+			count, err := strconv.Atoi(n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return count
+		}
+	}
+	t.Fatal("count-objects printed no in-pack count")
+	return 0
+}
+
 func TestFetchSkipsHistoryBehindTip(t *testing.T) {
 	remote := gittest.Remote(t)
 	gittest.Seed(t, remote, "cache", manyFiles(3))
@@ -612,5 +646,89 @@ func TestNotIgnoredPathOutsideRepoFails(t *testing.T) {
 	var gitErr *gitstore.Error
 	if !errors.As(err, &gitErr) {
 		t.Fatalf("err = %v, want *gitstore.Error", err)
+	}
+}
+
+func TestTracked(t *testing.T) {
+	clone := gittest.Clone(t, gittest.Remote(t))
+	repo := open(t, clone)
+	if err := os.WriteFile(filepath.Join(clone, "staged"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gittest.Run(t, clone, "add", "staged")
+	for path, want := range map[string]bool{"README.md": true, "staged": true, "untracked": false} {
+		if got, err := repo.Tracked(context.Background(), path); err != nil || got != want {
+			t.Errorf("Tracked(%q) = %v, %v; want %v", path, got, err, want)
+		}
+	}
+	var gitErr *gitstore.Error
+	if _, err := repo.Tracked(context.Background(), "../outside"); !errors.As(err, &gitErr) {
+		t.Errorf("err = %v, want *gitstore.Error", err)
+	}
+}
+
+// stubGit puts a git on PATH that runs script, and returns a file the stub
+// creates once it is running.
+func stubGit(t *testing.T, script string) (started string) {
+	t.Helper()
+	bin := t.TempDir()
+	started = filepath.Join(bin, "started")
+	stub := fmt.Sprintf("#!/bin/sh\ntouch %q\n%s\n", started, script)
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return started
+}
+
+// cancelWhenStarted runs Open, cancels it once git is running, and returns
+// how long Open took to return after the cancel.
+func cancelWhenStarted(t *testing.T, started string) time.Duration {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := gitstore.Open(ctx, t.TempDir())
+		done <- err
+	}()
+	for _, err := os.Stat(started); err != nil; _, err = os.Stat(started) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	begin := time.Now()
+	if err := <-done; err == nil {
+		t.Error("Open succeeded after cancel")
+	}
+	return time.Since(begin)
+}
+
+func TestCancelLetsGitFinishFirst(t *testing.T) {
+	terminated := filepath.Join(t.TempDir(), "terminated")
+	started := stubGit(t, fmt.Sprintf("trap 'touch %q' TERM\nsleep 0.5", terminated))
+
+	cancelWhenStarted(t, started)
+
+	if _, err := os.Stat(terminated); err == nil {
+		t.Error("git was signalled before it could finish")
+	}
+}
+
+func TestCancelLetsGitCleanUp(t *testing.T) {
+	cleaned := filepath.Join(t.TempDir(), "cleaned")
+	started := stubGit(t, fmt.Sprintf("trap 'touch %q; exit 143' TERM\nwhile :; do sleep 0.01; done", cleaned))
+
+	cancelWhenStarted(t, started)
+
+	if _, err := os.Stat(cleaned); err != nil {
+		t.Errorf("git got no chance to clean up: %v", err)
+	}
+}
+
+func TestCancelKillsGitThatIgnoresTerm(t *testing.T) {
+	started := stubGit(t, "trap '' TERM\ni=0; while [ $i -lt 2000 ]; do sleep 0.01; i=$((i+1)); done")
+
+	if elapsed := cancelWhenStarted(t, started); elapsed > 10*time.Second {
+		t.Errorf("git ran %v after cancel", elapsed)
 	}
 }

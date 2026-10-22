@@ -32,10 +32,15 @@ func (r Result) Report(w io.Writer, elapsed time.Duration) {
 			widths[j] = max(widths[j], len(rows[i][j]))
 		}
 	}
+	unconfigured := r.Removed
 	for i, p := range r.Projects {
 		c := rows[i]
 		fmt.Fprintf(w, "%-*s%*s in window: %*s new, %*s changed, %*s reused, %*s removed\n", keyWidth, p.Project,
 			widths[0], c[0], widths[1], c[1], widths[2], c[2], widths[3], c[3], widths[4], c[4])
+		unconfigured -= p.Removed
 	}
-	fmt.Fprintf(w, "fetched %s issues in %s\n", textfmt.Count(r.Fetched), textfmt.Duration(elapsed))
+	if unconfigured > 0 {
+		fmt.Fprintf(w, "removed %s of unconfigured projects\n", textfmt.Issues(unconfigured))
+	}
+	fmt.Fprintf(w, "fetched %s in %s\n", textfmt.Issues(r.Fetched), textfmt.Duration(elapsed))
 }

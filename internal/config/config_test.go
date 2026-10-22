@@ -182,6 +182,8 @@ func TestParseRejects(t *testing.T) {
 		{minimal + "fields: {customfield_1: story-points}\n", `config.yml: fields: customfield_1: invalid name "story-points"`},
 		{minimal + "fields: {customfield_1: a, customfield_01: b, customfield_1: c}\n", `config.yml: fields: duplicate id "customfield_1"`},
 		{minimal + "fields: {customfield_1: sprint, customfield_2: sprint}\n", `config.yml: fields: duplicate name "sprint"`},
+		{minimal + "fields: {customfield_1: status}\n", `config.yml: fields: customfield_1: name "status" is taken by a built-in field`},
+		{minimal + "fields: {customfield_1: url}\n", `config.yml: fields: customfield_1: name "url" is taken by a built-in field`},
 	} {
 		c, err := config.Parse([]byte(tc.data))
 		if err == nil || err.Error() != tc.want {

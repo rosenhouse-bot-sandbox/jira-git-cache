@@ -14,7 +14,7 @@ go install github.com/rosenhouse-bot-sandbox/jira-git-cache/cmd/jira-git-cache@l
 
 **You need:**
 - A GitHub Enterprise repo whose default branch is `main`, cloned locally, with admin access. Create it with a README so `main` exists.
-- A read-only Jira service account and its personal access token. The account must see only issues that every repo reader may see.
+- A read-only Jira service account and its personal access token. The account must see only issues and comments that every repo reader may see. Comments restricted to a role or group are synced like any other.
 - A self-hosted Actions runner, available to this repo, that can reach Jira. It needs `git`, Go, and access to the Go module proxy.
 - Trust for Jira's TLS certificate on your laptop and on the runner.
 - `gh`, logged in to your GHE host.
@@ -146,7 +146,7 @@ wrote /tmp/jira-preview (not pushed)
 ```
 
 **What happens:** `preview` does what `sync` does, then renders the result as `pull` would instead of pushing. It fetches the tip of `dev/jira-cache` first, so the counts approximate the next real run.
-The target directory must be missing, empty, or an earlier preview.
+The target directory must be missing, empty, or an earlier preview. Inside the repo, git must ignore it.
 
 **Then:** browse `/tmp/jira-preview` as you would `.jira-git-cache/` below.
 
@@ -168,7 +168,7 @@ PLAT/PLAT-123.json     # one issue, comments included
 
 Unchanged Jira data yields byte-identical files, so git stores and sends each unchanged issue only once.
 
-A full refresh refetches every issue. It runs when the last one is older than `full_refresh_every`, when started with `-f full=true`, and when `schema_version`, the `fields` map, or `jira_url` changes. It catches edits that don't bump `updated`, such as a renamed sprint.
+A full refresh refetches every issue. It runs when the last one is older than `full_refresh_every` minus 5 minutes, when started with `-f full=true`, and when `schema_version`, the `fields` map, or `jira_url` changes. It catches edits that don't bump `updated`, such as a renamed sprint.
 
 If any fetch fails, the run fails red and pushes nothing. The cache stays complete but stale.
 An issue deleted during the run is skipped with a warning.
@@ -181,7 +181,7 @@ gh workflow run jira-sync.yaml -f full=true
 
 ## Read the cache
 
-**You need:** read access to the repo and `jira-git-cache`. `jq` is optional.
+**You need:** read access to the repo and `jira-git-cache` on Linux or macOS. `jq` is optional.
 
 **Run:**
 
@@ -203,11 +203,11 @@ $ echo $?
 ```
 
 **What happens:**
-- `pull` reads `cache_branch` from `.jira-git-cache/config.yml` and fetches that branch from `origin`. It keeps the previous snapshot as a ref, so git usually sends only files that changed. It needs no Jira access.
+- `pull` reads `cache_branch` from `.jira-git-cache/config.yml` and fetches that branch from `origin`. It keeps the previous snapshot as a ref, so git usually sends only files that changed. It fetches with `--depth 1`, so git then reports the clone as shallow. It needs no Jira access.
 - It renders `issue.md`, `_index.md`, and `issue.json` from the branch's JSON. `issue.json` uses your version's schema. Rendering ships with `jira-git-cache`, so a new release can change the view without a Jira refetch.
 - It reads every older `schema_version`. It refuses a newer one and tells you to upgrade.
 - It warns when the snapshot's `tool_version` is newer than yours, because your view may differ from other readers'.
-- It works from any directory in the clone.
+- It works from any directory in the clone except the directories it replaces, such as `.jira-git-cache/PLAT/`.
 - It refuses to run unless `.jira-git-cache/.gitignore` ignores everything it writes.
 - It renders into a temporary directory, then moves each project directory and `_meta/` into place. Readers never see a half-written project. Concurrent pulls wait for each other.
 - Local edits outside `config.yml` and `.gitignore` are lost on the next `pull`.

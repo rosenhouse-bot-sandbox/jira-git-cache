@@ -20,13 +20,14 @@ var (
 
 // WikiToMarkdown converts Jira wiki markup to Markdown, line by line.
 // If a {code}, {noformat} or {quote} block is left open, it returns the input
-// with only its line endings normalized.
+// with only its line endings normalized and its "- " lines indented.
+// No line it returns starts with "- ", so none looks like an issue.md field.
 func WikiToMarkdown(wiki string) string {
 	var lines []string
 	for line := range strings.Lines(strings.ReplaceAll(wiki, "\r\n", "\n")) {
 		lines = append(lines, strings.TrimSuffix(line, "\n"))
 	}
-	raw := strings.Join(lines, "\n") + "\n"
+	raw := strings.Join(indent(lines, isDashItem), "\n") + "\n"
 	var out strings.Builder
 	quoted := false
 	for i := 0; i < len(lines); i++ {
@@ -46,6 +47,9 @@ func WikiToMarkdown(wiki string) string {
 			body = body[:n]
 			f := fence(strings.Join(body, "\n"), 3)
 			block = slices.Concat([]string{f + language(m[2])}, body, []string{f})
+			if slices.ContainsFunc(body, isDashItem) {
+				block = indent(block, func(string) bool { return true })
+			}
 			i += n + 1
 		}
 		for _, md := range block {
@@ -59,6 +63,21 @@ func WikiToMarkdown(wiki string) string {
 		return raw
 	}
 	return out.String()
+}
+
+func isDashItem(line string) bool { return strings.HasPrefix(line, "- ") }
+
+// indent prefixes the lines that match with one space. Markdown ignores it:
+// list items and fences may be indented, and a fence's indent is stripped
+// from its content.
+func indent(lines []string, match func(string) bool) []string {
+	out := slices.Clone(lines)
+	for i, line := range out {
+		if match(line) {
+			out[i] = " " + line
+		}
+	}
+	return out
 }
 
 // fence returns the shortest backtick run, at least minLen long, that s does not contain.
@@ -95,7 +114,7 @@ func convertLine(s string) string {
 		if strings.HasSuffix(m[1], "#") {
 			return strings.Repeat("   ", depth) + "1. " + inline(m[2])
 		}
-		return strings.Repeat("  ", depth) + "- " + inline(m[2])
+		return strings.Repeat("  ", depth) + "* " + inline(m[2])
 	}
 	return inline(s)
 }

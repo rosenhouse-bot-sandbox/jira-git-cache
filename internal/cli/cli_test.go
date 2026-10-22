@@ -231,7 +231,7 @@ func TestCommandsUseEnvHTTP(t *testing.T) {
 	for _, args := range [][]string{
 		{"setup", "--non-interactive", "--jira-url", f.jira.URL, "--projects", "PLAT"},
 		{"sync"},
-		{"preview", "out"},
+		{"preview", ".jira-git-cache/out"},
 	} {
 		before := f.requests.Load()
 		f.mustRun(t, args...)
@@ -247,7 +247,7 @@ func TestCommandsStopWhenContextEnds(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	f.ctx = ctx
-	for _, args := range [][]string{{"setup", "--non-interactive"}, {"sync"}, {"preview", "out"}, {"pull"}} {
+	for _, args := range [][]string{{"setup", "--non-interactive"}, {"sync"}, {"preview", ".jira-git-cache/out"}, {"pull"}} {
 		wantResult(t, f.run(t, args...), result{1, "", "✗ git rev-parse --show-toplevel: context canceled\n"})
 	}
 }

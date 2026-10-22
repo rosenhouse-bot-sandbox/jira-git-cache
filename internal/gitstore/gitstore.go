@@ -12,7 +12,15 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
+)
+
+// A cancelled git gets finishGrace to finish, then SIGTERM, then SIGKILL
+// killDelay later. git can leave lock files behind when signalled.
+const (
+	finishGrace = 2 * time.Second
+	killDelay   = 3 * time.Second
 )
 
 // BotName and BotEmail identify the author and committer of snapshot commits.
@@ -218,6 +226,15 @@ func (r *Repo) NotIgnored(ctx context.Context, paths []string) ([]string, error)
 	return unlisted(paths, out), nil
 }
 
+// Tracked reports whether the index holds path.
+func (r *Repo) Tracked(ctx context.Context, path string) (bool, error) {
+	_, err := r.git(ctx, "", nil, "ls-files", "--error-unmatch", "--", path)
+	if exitedWith(err, 1) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // unlisted returns the paths missing from a NUL-separated list.
 func unlisted(paths []string, list string) []string {
 	listed := map[string]bool{}
@@ -235,6 +252,11 @@ func unlisted(paths []string, list string) []string {
 
 func (r *Repo) git(ctx context.Context, stdin string, env []string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Cancel = func() error {
+		time.AfterFunc(finishGrace, func() { _ = cmd.Process.Signal(syscall.SIGTERM) })
+		return nil
+	}
+	cmd.WaitDelay = finishGrace + killDelay
 	cmd.Dir = r.Dir
 	cmd.Env = append(append(os.Environ(), "LC_ALL=C", "GIT_TERMINAL_PROMPT=0"), env...)
 	cmd.Stdin = strings.NewReader(stdin)

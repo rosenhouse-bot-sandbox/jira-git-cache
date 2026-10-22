@@ -7,6 +7,14 @@ import (
 	"github.com/rosenhouse-bot-sandbox/jira-git-cache/internal/textfmt"
 )
 
+func TestIssues(t *testing.T) {
+	for n, want := range map[int]string{0: "0 issues", 1: "1 issue", 2: "2 issues", 1204: "1,204 issues"} {
+		if got := textfmt.Issues(n); got != want {
+			t.Errorf("Issues(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
 func TestCount(t *testing.T) {
 	for n, want := range map[int]string{
 		0:       "0",

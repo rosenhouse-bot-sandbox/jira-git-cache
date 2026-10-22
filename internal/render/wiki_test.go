@@ -27,10 +27,10 @@ func TestWikiToMarkdown(t *testing.T) {
 
 		{"bq", "bq. q *b*", "> q **b**\n"},
 
-		{"bullets", "* a\n** b\n- c\n*** d", "- a\n  - b\n- c\n    - d\n"},
+		{"bullets", "* a\n** b\n- c\n*** d", "* a\n  * b\n* c\n    * d\n"},
 		{"numbers", "# a\n## b", "1. a\n   1. b\n"},
-		{"last marker sets type", "#* a\n*# b", "  - a\n   1. b\n"},
-		{"list item is converted", "* {{x}} *y*", "- `x` **y**\n"},
+		{"last marker sets type", "#* a\n*# b", "  * a\n   1. b\n"},
+		{"list item is converted", "* {{x}} *y*", "* `x` **y**\n"},
 		{"list needs space", "*a", "*a\n"},
 
 		{"hr", "----", "***\n"},
@@ -81,14 +81,16 @@ func TestWikiToMarkdown(t *testing.T) {
 		{"code block no lang", "{code:title=X}\nx\n{code}", "```\nx\n```\n"},
 		{"code block tags trimmed", "  {code}  \nx\n {code}", "```\nx\n```\n"},
 		{"code block keeps crlf content", "{code}\r\n  a  \r\n{code}", "```\n  a  \n```\n"},
+		{"code block with a dash item is indented", "{code:yaml}\n- a: 1\n b\n{code}", " ```yaml\n - a: 1\n  b\n ```\n"},
 		{"noformat block", "{noformat}\n{code}\n{noformat}", "```\n{code}\n```\n"},
 		{"code block ignores noformat", "{code}\n{noformat}\n{code}", "```\n{noformat}\n```\n"},
 
-		{"quote", "{quote}\nh1. a\n* b\n\n{quote}\nafter", "\n> ### a\n> - b\n> \n\nafter\n"},
+		{"quote", "{quote}\nh1. a\n* b\n\n{quote}\nafter", "\n> ### a\n> * b\n> \n\nafter\n"},
 		{"code in quote", "{quote}\n{code}\n*x*\n{code}\n{quote}", "\n> ```\n> *x*\n> ```\n\n"},
 		{"quote in code", "{code}\n{quote}\n{code}", "```\n{quote}\n```\n"},
 
 		{"unclosed code", "a *b*\r\n{code}\r\n*x*", "a *b*\n{code}\n*x*\n"},
+		{"unclosed code with a dash item", "- a\n-b\n{code}", " - a\n-b\n{code}\n"},
 		{"unclosed noformat", "{noformat}\nh1. x", "{noformat}\nh1. x\n"},
 		{"unclosed quote", "{quote}\n*x*", "{quote}\n*x*\n"},
 	}

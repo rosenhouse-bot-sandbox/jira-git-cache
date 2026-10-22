@@ -527,6 +527,24 @@ func TestRunSkipsIssuesThatLeaveDuringSync(t *testing.T) {
 	}
 }
 
+func TestRunDropsChangedIssueThatLeavesDuringSync(t *testing.T) {
+	f := newFixture(t, "PLAT")
+	f.put(updated, "PLAT-1", "PLAT-2")
+	first := f.mustRun(syncer.Options{})
+	f.put(later, "PLAT-1")
+	f.jira.OnRequest = func(r jiramock.Request) {
+		if r.Path == "/rest/api/2/issue/PLAT-1" {
+			f.jira.Delete("PLAT-1")
+		}
+	}
+
+	r := f.mustRun(syncer.Options{Previous: first.Snapshot})
+
+	if got := sortedKeys(r.Snapshot); !slices.Equal(got, []string{"PLAT-2"}) {
+		t.Errorf("stored %v", got)
+	}
+}
+
 func TestRunStopsOnBadToken(t *testing.T) {
 	f := newFixture(t, "PLAT")
 	f.token = "wrong"

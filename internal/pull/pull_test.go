@@ -2,6 +2,8 @@ package pull_test
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -163,13 +165,153 @@ func TestPullRendersSnapshotFromSubdirectory(t *testing.T) {
 
 	assertFiles(t, cacheFiles(t, filepath.Join(f.dir, ".jira-git-cache")), render.Tree(s))
 	const want = "✓ .jira-git-cache/ now holds the snapshot fetched 2026-10-22T05:00:41Z (12m ago)\n" +
-		"  PLAT 1,204 issues, INFRA 387 issues, OLD 1 issues, ZED 0 issues\n"
+		"  PLAT 1,204 issues, INFRA 387 issues, OLD 1 issue, ZED 0 issues\n"
 	if got := f.stdout.String(); got != want {
 		t.Errorf("stdout:\n%s\nwant:\n%s", got, want)
 	}
 	if got := f.stderr.String(); got != "" {
 		t.Errorf("stderr: %q", got)
 	}
+}
+
+func TestPullRefusesToRunInsideADirectoryItReplaces(t *testing.T) {
+	for _, dir := range []string{"PLAT", "PLAT/PLAT-1", "_meta"} {
+		t.Run(dir, func(t *testing.T) {
+			f := newFixture(t, defaultMain())
+			s := synced(&fetchedAt, map[string]int{"PLAT": 1}, "PLAT-1")
+			f.seed(t, s)
+			f.mustRun(t)
+			f.opts.Dir = filepath.Join(f.dir, ".jira-git-cache", dir)
+
+			err := f.run(t)
+
+			want := "pull replaces .jira-git-cache/" + strings.Split(dir, "/")[0] + "; run it from outside that directory"
+			if err == nil || err.Error() != want {
+				t.Errorf("got %v, want %s", err, want)
+			}
+			if _, err := os.Stat(f.opts.Dir); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+}
+
+func TestPullRefusesToRunInsideALinkToADirectoryItReplaces(t *testing.T) {
+	f := newFixture(t, defaultMain())
+	f.seed(t, synced(&fetchedAt, map[string]int{"PLAT": 1}, "PLAT-1"))
+	f.mustRun(t)
+	f.opts.Dir = filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(filepath.Join(f.dir, ".jira-git-cache", "PLAT"), f.opts.Dir); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.run(t); err == nil || !strings.HasPrefix(err.Error(), "pull replaces ") {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestPullRunsInsideCacheDirectory(t *testing.T) {
+	f := newFixture(t, defaultMain())
+	f.seed(t, synced(&fetchedAt, map[string]int{"PLAT": 1}, "PLAT-1"))
+	f.write(t, ".jira-git-cache/notes/x", "")
+	for _, dir := range []string{".jira-git-cache", ".jira-git-cache/notes"} {
+		f.opts.Dir = filepath.Join(f.dir, dir)
+		f.mustRun(t)
+	}
+}
+
+func TestPullNeverShowsAHalfWrittenProject(t *testing.T) {
+	f := newFixture(t, defaultMain())
+	var keys []string
+	for i := range 500 {
+		keys = append(keys, fmt.Sprint("PLAT-", i+1))
+	}
+	f.seed(t, synced(&fetchedAt, map[string]int{"PLAT": len(keys)}, keys...))
+	project := filepath.Join(f.dir, ".jira-git-cache", "PLAT")
+	stop, missing := make(chan struct{}), make(chan string, 1)
+	go func() {
+		defer close(missing)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if key := missingIssue(project); key != "" {
+				missing <- key
+				return
+			}
+		}
+	}()
+
+	f.mustRun(t)
+	close(stop)
+
+	if key := <-missing; key != "" {
+		t.Errorf("PLAT/_index.md listed %s before its issue.md existed", key)
+	}
+}
+
+// missingIssue returns a key that dir/_index.md lists without its issue.md.
+// It holds dir open, so a rename of dir does not change what it sees.
+func missingIssue(dir string) string {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = root.Close() }()
+	index, err := root.Open("_index.md")
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = index.Close() }()
+	data, err := io.ReadAll(index)
+	if err != nil {
+		return ""
+	}
+	for line := range strings.Lines(string(data)) {
+		key, _, _ := strings.Cut(line, " | ")
+		if _, err := root.Stat(key + "/issue.md"); err != nil {
+			return key
+		}
+	}
+	return ""
+}
+
+func TestPullWritesReadableFiles(t *testing.T) {
+	f := newFixture(t, defaultMain())
+	f.seed(t, synced(&fetchedAt, map[string]int{"PLAT": 1}, "PLAT-1"))
+	f.mustRun(t)
+
+	ref := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ref, "dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ref, "file"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{
+		"_meta":                  "dir",
+		"PLAT":                   "dir",
+		"PLAT/PLAT-1":            "dir",
+		"_meta/snapshot.json":    "file",
+		"PLAT/_index.md":         "file",
+		"PLAT/PLAT-1/issue.md":   "file",
+		"PLAT/PLAT-1/issue.json": "file",
+	} {
+		if got, want := mode(t, filepath.Join(f.dir, ".jira-git-cache", path)), mode(t, filepath.Join(ref, want)); got != want {
+			t.Errorf("%s: mode %v, want %v", path, got, want)
+		}
+	}
+}
+
+func mode(t *testing.T, path string) os.FileMode {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Mode()
 }
 
 func TestPullFindsConfigInRepoSubdirectory(t *testing.T) {
@@ -234,6 +376,22 @@ func TestPullRefusesUnignoredPaths(t *testing.T) {
 			assertFiles(t, cacheFiles(t, filepath.Join(f.dir, ".jira-git-cache")), map[string][]byte{})
 		})
 	}
+}
+
+func TestPullRefusesTrackedPaths(t *testing.T) {
+	f := newFixture(t, defaultMain())
+	f.seed(t, synced(&fetchedAt, map[string]int{"PLAT": 1}, "PLAT-1"))
+	f.mustRun(t)
+	gittest.Run(t, f.dir, "add", "--force", ".jira-git-cache/PLAT/PLAT-1/issue.md")
+
+	err := f.run(t)
+
+	const want = ".jira-git-cache/PLAT/PLAT-1/issue.md is tracked; untrack it with: git rm -r --cached ':/.jira-git-cache/PLAT/PLAT-1/issue.md'"
+	if err == nil || err.Error() != want {
+		t.Fatalf("got %v, want %s", err, want)
+	}
+	gittest.Run(t, filepath.Join(f.dir, ".jira-git-cache"), "rm", "-r", "--quiet", "--cached", ":/.jira-git-cache/PLAT/PLAT-1/issue.md")
+	f.mustRun(t)
 }
 
 func TestPullFetchFailureLeavesCacheAlone(t *testing.T) {
@@ -313,6 +471,7 @@ func TestPullRefusesBranchThatIsNotASnapshot(t *testing.T) {
 func TestPullWarnsWhenSnapshotToolIsNewer(t *testing.T) {
 	for _, tc := range []struct{ theirs, ours, warning string }{
 		{"v0.2.0", "v0.1.0", "warning: the snapshot was written by jira-git-cache v0.2.0, newer than yours (v0.1.0); your view may differ from other readers'\n"},
+		{"v0.1.0", "v0.0.0-20261022131232-d376b2d5fe4d", "warning: the snapshot was written by jira-git-cache v0.1.0, newer than yours (v0.0.0-20261022131232-d376b2d5fe4d); your view may differ from other readers'\n"},
 		{"v0.1.0", "v0.1.0", ""},
 		{"v0.1.0", "v0.2.0", ""},
 	} {
@@ -322,6 +481,28 @@ func TestPullWarnsWhenSnapshotToolIsNewer(t *testing.T) {
 			s.Meta.ToolVersion = tc.theirs
 			f.seed(t, s)
 			f.opts.ToolVersion = tc.ours
+
+			f.mustRun(t)
+
+			if got := f.stderr.String(); got != tc.warning {
+				t.Errorf("stderr %q, want %q", got, tc.warning)
+			}
+		})
+	}
+}
+
+func TestPullWarnsWhenSnapshotIsFromTheFuture(t *testing.T) {
+	for _, tc := range []struct {
+		ahead   time.Duration
+		warning string
+	}{
+		{5 * time.Minute, ""},
+		{5*time.Minute + time.Second, "warning: the snapshot's fetched_at 2026-10-22T05:00:41Z is 5m ahead of this machine's clock; check the runner's clock\n"},
+	} {
+		t.Run(tc.ahead.String(), func(t *testing.T) {
+			f := newFixture(t, defaultMain())
+			f.seed(t, synced(&fetchedAt, nil))
+			f.opts.Now = fetchedAt.Add(-tc.ahead)
 
 			f.mustRun(t)
 
