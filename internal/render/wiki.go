@@ -67,7 +67,7 @@ func language(params string) string {
 }
 
 func convertLine(s string) string {
-	if s == "----" {
+	if strings.TrimSpace(s) == "----" {
 		return "---"
 	}
 	if m := heading.FindStringSubmatch(s); m != nil {

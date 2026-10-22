@@ -34,6 +34,7 @@ func TestWikiToMarkdown(t *testing.T) {
 		{"list needs space", "*a", "*a\n"},
 
 		{"hr", "----", "---\n"},
+		{"hr with spaces", " ---- ", "---\n"},
 		{"five dashes", "-----", "-----\n"},
 
 		{"bold", "a *b* c", "a **b** c\n"},
@@ -50,7 +51,7 @@ func TestWikiToMarkdown(t *testing.T) {
 
 		{"monospace", "{{x*y*}} *z*", "`x*y*` **z**\n"},
 		{"two code spans", "{{a}} and {{b}} *c*", "`a` and `b` **c**\n"},
-		{"inline code","run {code}k *x*{code} now", "run `k *x*` now\n"},
+		{"inline code", "run {code}k *x*{code} now", "run `k *x*` now\n"},
 		{"inline code with params", "{code:go}x{code}", "`x`\n"},
 		{"inline noformat", "{noformat}*n*{noformat}", "`*n*`\n"},
 
