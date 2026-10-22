@@ -30,19 +30,19 @@ func TestPreviewRendersWithoutPushing(t *testing.T) {
 	f := newSetUpFixture(t)
 	before := f.branchTip(t)
 
-	r := f.run(t, "preview", "out")
+	r := f.run(t, "preview", ".jira-git-cache/out")
 
 	wantResult(t, r, result{0, `full refresh: no previous full refresh
 PLAT   2 in window: 2 new, 0 changed, 0 reused, 0 removed
 fetched 2 issues in 0s
-wrote out (not pushed)
+wrote .jira-git-cache/out (not pushed)
 `, ""})
 	want := ".jira-git-cache-preview PLAT/PLAT-1/issue.json PLAT/PLAT-1/issue.md PLAT/PLAT-2/issue.json PLAT/PLAT-2/issue.md " +
 		"PLAT/_index.md _meta/fields.json _meta/snapshot.json"
-	if got := strings.Join(files(t, f.path("out")), " "); got != want {
+	if got := strings.Join(files(t, f.path(".jira-git-cache/out")), " "); got != want {
 		t.Errorf("files: %s\nwant:  %s", got, want)
 	}
-	if got := f.read(t, "out/PLAT/_index.md"); got != "PLAT-1 | Open | Unassigned | Task | Issue PLAT-1\nPLAT-2 | Open | Unassigned | Task | Issue PLAT-2\n" {
+	if got := f.read(t, ".jira-git-cache/out/PLAT/_index.md"); got != "PLAT-1 | Open | Unassigned | Task | Issue PLAT-1\nPLAT-2 | Open | Unassigned | Task | Issue PLAT-2\n" {
 		t.Errorf("_index.md:\n%s", got)
 	}
 	if f.branchTip(t) != before {
@@ -107,6 +107,17 @@ func TestPreviewFailures(t *testing.T) {
 		t.Errorf("config.yml:\n%s", got)
 	}
 
+	wantResult(t, f.run(t, "preview", "new"), result{1, "", "✗ preview: new is in the repo and not ignored; pick a directory outside it\n"})
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(f.dir, link); err != nil {
+		t.Fatal(err)
+	}
+	deep := filepath.Join(link, "a", "b")
+	wantResult(t, f.run(t, "preview", deep), result{1, "", "✗ preview: " + deep + " is in the repo and not ignored; pick a directory outside it\n"})
+	if _, err := os.Stat(f.path("new")); !os.IsNotExist(err) {
+		t.Errorf("created new: %v", err)
+	}
+
 	delete(f.env, "JIRA_TOKEN")
-	wantResult(t, f.run(t, "preview", "new"), result{1, "", "✗ read token: stdin is not a terminal\n"})
+	wantResult(t, f.run(t, "preview", t.TempDir()), result{1, "", "✗ read token: stdin is not a terminal\n"})
 }

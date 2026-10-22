@@ -114,6 +114,9 @@ func (e Env) preview(ctx context.Context, args []string) error {
 	if err := checkPreviewDir(dir, name); err != nil {
 		return err
 	}
+	if err := requireIgnoredInRepo(ctx, e.Dir, dir, name); err != nil {
+		return err
+	}
 	token := e.Getenv("JIRA_TOKEN")
 	if token == "" {
 		if token, err = e.ReadPassword("Jira token (hidden; or set JIRA_TOKEN): "); err != nil {
@@ -150,6 +153,38 @@ func checkPreviewDir(dir, name string) error {
 		return nil
 	}
 	return fmt.Errorf("refusing to replace %s: it is neither empty nor an earlier preview", name)
+}
+
+// requireIgnoredInRepo keeps a preview from leaving cache files for main to commit.
+func requireIgnoredInRepo(ctx context.Context, cwd, dir, name string) error {
+	repo, err := gitstore.Open(ctx, cwd)
+	if err != nil {
+		return err
+	}
+	rel, _ := filepath.Rel(repo.Dir, resolve(dir))
+	if !filepath.IsLocal(rel) {
+		return nil
+	}
+	notIgnored, err := repo.NotIgnored(ctx, []string{filepath.ToSlash(rel) + "/" + previewMarker})
+	if err != nil {
+		return err
+	}
+	if len(notIgnored) > 0 {
+		return fmt.Errorf("preview: %s is in the repo and not ignored; pick a directory outside it", name)
+	}
+	return nil
+}
+
+// resolve evaluates the symlinks in path's longest existing prefix.
+func resolve(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	parent := filepath.Dir(path)
+	if parent == path {
+		return path
+	}
+	return filepath.Join(resolve(parent), filepath.Base(path))
 }
 
 func writeTree(dir string, tree map[string][]byte) error {
