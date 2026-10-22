@@ -162,6 +162,9 @@ func Parse(data []byte) (Config, error) {
 	if err := dec.Decode(&c); err != nil && !errors.Is(err, io.EOF) {
 		return Config{}, fmt.Errorf("config.yml: %w", err)
 	}
+	if err := dec.Decode(new(yaml.Node)); !errors.Is(err, io.EOF) {
+		return Config{}, errors.New("config.yml: must hold one YAML document")
+	}
 	c.JiraURL = strings.TrimSuffix(c.JiraURL, "/")
 	if err := c.Validate(); err != nil {
 		return Config{}, err

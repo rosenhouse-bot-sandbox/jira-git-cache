@@ -137,6 +137,7 @@ func TestParseRejects(t *testing.T) {
 		{"jira_url: https://jira.example.com?\nprojects: [PLAT]\n", `config.yml: jira_url: must be an absolute http or https URL with no query or fragment: "https://jira.example.com?"`},
 		{"jira_url: 'https://jira.example.com#'\nprojects: [PLAT]\n", `config.yml: jira_url: must be an absolute http or https URL with no query or fragment: "https://jira.example.com#"`},
 		{"jira_url: 'https://jira.example.com/%zz'\nprojects: [PLAT]\n", `config.yml: jira_url: must be an absolute http or https URL with no query or fragment: "https://jira.example.com/%zz"`},
+		{minimal + "---\nbogus: 1\n", "config.yml: must hold one YAML document"},
 		{minimal + "cache_branch: ''\n", "config.yml: cache_branch: must not be empty"},
 		{minimal + "cache_branch: main\n", "config.yml: cache_branch: must not be main"},
 		{"jira_url: https://jira.example.com\n", "config.yml: projects: must list at least one project"},
