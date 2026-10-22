@@ -39,12 +39,14 @@ func run(args []string) int {
 		Stderr:       os.Stderr,
 		Dir:          dir,
 		Getenv:       os.Getenv,
-		HTTP:         &http.Client{Timeout: 60 * time.Second},
+		HTTP:         newHTTPClient(),
 		Now:          time.Now,
 		ReadPassword: readPassword(ctx),
 		BuildVersion: buildVersion,
 	}, args)
 }
+
+func newHTTPClient() *http.Client { return &http.Client{Timeout: time.Minute} }
 
 // readPassword prompts on stderr and reads a line from the terminal without echo, until ctx ends.
 func readPassword(ctx context.Context) func(string) (string, error) {
