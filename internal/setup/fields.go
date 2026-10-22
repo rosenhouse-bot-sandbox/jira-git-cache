@@ -53,8 +53,8 @@ func ParseSelection(s string, n int) ([]int, error) {
 		if errLo != nil || errHi != nil || first < 1 || first > last || last > n {
 			return nil, fmt.Errorf("invalid selection %q: use numbers 1-%d, ranges like 1-3, commas, or none", strings.TrimSpace(part), n)
 		}
-		for i := first; i <= last; i++ {
-			chosen[i] = true
+		for i := range last - first + 1 {
+			chosen[first+i] = true
 		}
 	}
 	return slices.Sorted(maps.Keys(chosen)), nil

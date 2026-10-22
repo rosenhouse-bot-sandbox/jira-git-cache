@@ -30,8 +30,19 @@ type fixture struct {
 	jira   *jiramock.Server
 	remote string
 	dir    string
-	out    *strings.Builder
+	out    *cappedOutput
 	opts   setup.Options
+}
+
+// cappedOutput panics past 1 MiB, so a mutant that re-asks forever dies fast
+// instead of exhausting memory.
+type cappedOutput struct{ strings.Builder }
+
+func (o *cappedOutput) Write(p []byte) (int, error) {
+	if o.Len()+len(p) > 1<<20 {
+		panic("setup wrote more than 1 MiB")
+	}
+	return o.Builder.Write(p)
 }
 
 // newFixture serves one PLAT issue with no custom fields to a fresh clone.
@@ -41,7 +52,7 @@ func newFixture(t *testing.T) *fixture {
 	srv.Put(jiramock.NewIssue("PLAT-1", 10001, jiramock.DefaultNow.Add(-time.Hour)))
 	remote := gittest.Remote(t)
 	dir := gittest.Clone(t, remote)
-	out := &strings.Builder{}
+	out := &cappedOutput{}
 	return &fixture{jira: srv, remote: remote, dir: dir, out: out, opts: setup.Options{
 		Dir:         dir,
 		Stdin:       strings.NewReader(""),
