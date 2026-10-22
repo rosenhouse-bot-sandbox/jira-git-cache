@@ -2,8 +2,11 @@
 
 package pull
 
-import "errors"
+import (
+	"context"
+	"errors"
+)
 
-func lock(string) (func(), error) {
+func lock(context.Context, string) (func(), error) {
 	return nil, errors.New("pull is not supported on this OS")
 }

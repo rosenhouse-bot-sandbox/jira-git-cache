@@ -102,7 +102,7 @@ func Run(ctx context.Context, opts Options) error {
 	if err := c.requireIgnored(ctx, probes); err != nil {
 		return err
 	}
-	unlock, err := lock(filepath.Join(c.dir, ".lock"))
+	unlock, err := lock(ctx, filepath.Join(c.dir, ".lock"))
 	if err != nil {
 		return err
 	}
@@ -163,7 +163,7 @@ func report(w io.Writer, cfg config.Config, meta snapshot.Meta, age time.Duratio
 	fmt.Fprintf(w, "  %s\n", strings.Join(counts, ", "))
 }
 
-// cache is the .jira-git-cache directory, as dir on disk and as git, a path
+// cache locates .jira-git-cache. dir is its path on disk. git is its path
 // relative to the repo top level.
 type cache struct {
 	repo     *gitstore.Repo
