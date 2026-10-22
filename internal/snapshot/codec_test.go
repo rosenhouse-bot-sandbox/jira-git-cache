@@ -192,6 +192,28 @@ func TestEncodeIssueWritesEmptyCustom(t *testing.T) {
 	}
 }
 
+func TestEncodeIssueIgnoresJiraTimeZoneAndCommentOrder(t *testing.T) {
+	inUTC := jiramock.ExampleIssue()
+	inUTC.Fields["created"] = "2026-10-01T14:02:11.000+0000"
+	inUTC.Fields["updated"] = "2026-10-20T09:15:40.123+0000"
+	c1, c2 := inUTC.Comments[0], inUTC.Comments[1]
+	c1["created"], c1["updated"] = "2026-10-19T17:30:02.000+0000", "2026-10-19T17:30:02.000+0000"
+	c2["created"], c2["updated"] = "2026-10-20T08:00:00.000+0000", "2026-10-20T09:00:00.000+0000"
+	inUTC.Comments = []map[string]any{c2, c1}
+
+	encode := func(m jiramock.Issue) string {
+		iss, comments := fromMock(t, m)
+		got, err := snapshot.FromJira(iss, comments, map[string]string{"customfield_10100": "sprint", "customfield_10002": "story_points"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(snapshot.EncodeIssue(got))
+	}
+	if a, b := encode(jiramock.ExampleIssue()), encode(inUTC); a != b {
+		t.Errorf("bytes differ:\n%s\n%s", a, b)
+	}
+}
+
 func TestEncodeIssuePanicsOnUnencodableValue(t *testing.T) {
 	defer func() {
 		if recover() == nil {
