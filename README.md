@@ -10,12 +10,14 @@ Anyone who can read the repo can read every synced issue. Anyone who can push to
 go install github.com/rosenhouse-bot-sandbox/jira-git-cache/cmd/jira-git-cache@latest
 ```
 
+It needs Go 1.24.7 or later.
+
 ## Set up a cache repo
 
 **You need:**
 - A GitHub Enterprise repo whose default branch is `main`, cloned locally, with admin access. Create it with a README so `main` exists.
 - A read-only Jira service account and its personal access token. The account must see only issues and comments that every repo reader may see. Comments restricted to a role or group are synced like any other.
-- A self-hosted Actions runner, available to this repo, that can reach Jira. It needs `git`, Go, and access to the Go module proxy.
+- A self-hosted Actions runner, available to this repo, that can reach Jira. It needs `git`, Go 1.24.7 or later, and access to the Go module proxy.
 - Trust for Jira's TLS certificate on your laptop and on the runner.
 - `gh`, logged in to your GHE host.
 
@@ -120,10 +122,10 @@ Next steps:
             JIRA_TOKEN: ${{ secrets.JIRA_TOKEN }}
   ```
 
-  The workflow pins the `jira-git-cache` version that ran `setup`.
+  The workflow pins the `jira-git-cache` version that ran `setup`. If `setup` says it cannot pin its version, pass `--tool-version`.
 - The new branch holds only `_meta/snapshot.json` with `"fetched_at": null`. Freshness checks fail until the first sync lands.
 - If the config, the workflow, or the branch already exist, `setup` leaves them alone and says so.
-- `jira-git-cache help` lists a flag for each question. With `--non-interactive` and `JIRA_TOKEN` set, `setup` asks nothing.
+- `jira-git-cache help` lists a flag for each question. With `--non-interactive`, `JIRA_TOKEN`, `--jira-url`, and `--projects`, `setup` asks nothing.
 
 **Then:** finish the printed steps.
 
@@ -171,7 +173,7 @@ Unchanged Jira data yields byte-identical files, so git stores and sends each un
 A full refresh refetches every issue. It runs when the last one is older than `full_refresh_every` minus 5 minutes, when started with `-f full=true`, and when `schema_version`, the `fields` map, or `jira_url` changes. It catches edits that don't bump `updated`, such as a renamed sprint.
 
 If any fetch fails, the run fails red and pushes nothing. The cache stays complete but stale.
-An issue deleted during the run is skipped with a warning.
+An issue deleted or moved during the run is skipped with a warning.
 
 **Force a full refresh now:**
 
@@ -206,12 +208,12 @@ $ echo $?
 - `pull` reads `cache_branch` from `.jira-git-cache/config.yml` and fetches that branch from `origin`. It keeps the previous snapshot as a ref, so git usually sends only files that changed. It fetches with `--depth 1`, so git then reports the clone as shallow. It needs no Jira access.
 - It renders `issue.md`, `_index.md`, and `issue.json` from the branch's JSON. `issue.json` uses your version's schema. Rendering ships with `jira-git-cache`, so a new release can change the view without a Jira refetch.
 - It reads every older `schema_version`. It refuses a newer one and tells you to upgrade.
-- It warns when the snapshot's `tool_version` is newer than yours, because your view may differ from other readers'.
+- It warns when the snapshot's `tool_version` is a newer release than yours, because your view may differ from other readers'.
 - It works from any directory in the clone except the directories it replaces, such as `.jira-git-cache/PLAT/`.
 - It refuses to run unless `.jira-git-cache/.gitignore` ignores everything it writes.
 - It renders into a temporary directory, then moves each project directory and `_meta/` into place. Readers never see a half-written project. Concurrent pulls wait for each other.
-- Local edits outside `config.yml` and `.gitignore` are lost on the next `pull`.
-- With `--max-age`, it exits 1 if the snapshot is older than the limit or no sync has run.
+- `pull` overwrites `_meta/` and every project directory, so local edits there are lost.
+- With `--max-age`, it still renders the snapshot, then exits 1 if the snapshot is older than the limit or no sync has run.
 - If the fetch fails, it leaves `.jira-git-cache/` alone and exits 2.
 
 **What you get:**
@@ -297,9 +299,9 @@ Send changes to Jira. The cache catches up on the next run.
 | Point at another Jira | `jira_url` | Full refresh. |
 | Change how often it syncs | the workflow's `cron` | New schedule. |
 | Change how often it fully refreshes | `full_refresh_every` | New cadence. |
-| Upgrade `jira-git-cache` | the workflow's `TOOL` | Full refresh if `schema_version` changed. Older readers are warned, or refused if `schema_version` changed. |
+| Upgrade `jira-git-cache` | the workflow's `TOOL` | Older readers are warned. If `schema_version` changed, a full refresh runs and older readers are refused. |
 
-`.jira-git-cache/_meta/fields.json` lists every custom field's id, for finding ids to map.
+Find ids to map in `.jira-git-cache/_meta/fields.json`.
 
 ## When the cache is stale
 
@@ -316,7 +318,7 @@ gh run view <run-id> --log-failed
 | `x509: certificate signed by unknown authority` | Trust Jira's CA on the runner. |
 | Connection timeout to Jira | The runner can't reach Jira. Check its network. |
 | `429` after retries | Jira rate-limits the service account. Lower `concurrency`. |
-| Push rejected | The ruleset on `dev/jira-cache` doesn't let GitHub Actions bypass it, or the branch changed during the run; run again. |
+| Push rejected | Either the ruleset on `dev/jira-cache` doesn't let GitHub Actions bypass it, or the branch changed during the run and the next run will succeed. |
 | `… has no _meta/snapshot.json, so it is not a cache` | `cache_branch` names a branch the tool didn't create. Pick an unused name in `.jira-git-cache/config.yml`. |
 | Job exceeded its time limit | A full refresh outgrew `timeout-minutes`. Raise it. |
 | Runs stay queued | No runner matches `runs-on`, or the runner group excludes this repo. |
