@@ -1,0 +1,25 @@
+h1. Watch leak
+
+The controller leaks *watches* on restart. See [the runbook|https://wiki.example.com/x] and [~jdoe].
+
+h2. Steps
+# Restart the controller with {{kubectl rollout restart}}
+# Count watches
+## per namespace
+* Seen on _staging_ only
+
+{code:bash}
+kubectl get pods -o name | wc -l
+echo *not bold*
+{code}
+
+bq. It happened again.
+
+{quote}
+Logs show *many* reconnects.
+{quote}
+
+||Env||Leaks||
+|staging|yes|
+----
+Related: [https://jira.example.com/browse/PLAT-100]
