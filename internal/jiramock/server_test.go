@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
-	"runtime"
 	"slices"
 	"strconv"
 	"sync"
@@ -844,7 +843,6 @@ func TestConcurrentRequests(t *testing.T) {
 		key := "PLAT-" + r.Query.Get("startAt")
 		s.Put(jiramock.NewIssue(key, 1, jiramock.DefaultNow))
 		s.Delete(key)
-		s.Inject(jiramock.Fault{Path: "/elsewhere", Status: http.StatusTeapot})
 	}
 	statuses := make(chan int, n)
 	var wg sync.WaitGroup
@@ -868,16 +866,17 @@ func TestConcurrentRequests(t *testing.T) {
 			statuses <- res.StatusCode
 		}()
 	}
-	for len(s.Requests()) < n && !t.Failed() {
-		runtime.Gosched()
-	}
-	wg.Wait()
-	close(statuses)
-
+	go func() {
+		wg.Wait()
+		close(statuses)
+	}()
 	count := map[int]int{}
 	for st := range statuses {
 		count[st]++
+		s.Requests()
+		s.Inject(jiramock.Fault{Path: "/elsewhere", Status: http.StatusTeapot})
 	}
+
 	if want := map[int]int{http.StatusServiceUnavailable: failures, http.StatusOK: n - failures}; !reflect.DeepEqual(count, want) {
 		t.Errorf("statuses = %v, want %v", count, want)
 	}
