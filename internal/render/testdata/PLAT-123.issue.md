@@ -22,7 +22,7 @@
 ## Description
 
 #### Repro
-- restart controller
+* restart controller
 `kubectl ...`
 
 ## Comments

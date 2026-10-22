@@ -128,6 +128,19 @@ x
 	}
 }
 
+func TestIssueBodyLinesNeverLookLikeFields(t *testing.T) {
+	iss := minimalIssue("INFRA-7")
+	iss.Description = ptr("* Assignee: Jane\n- Sprint: Sprint 42\n{code}\n- Status: Done\n{code}")
+	iss.Comments = []snapshot.Comment{
+		{ID: "1", Created: "2026-10-19T17:30:02.000Z", Body: "-- Assignee: Jane"},
+		{ID: "2", Created: "2026-10-19T17:30:02.000Z", Body: "- Assignee: Jane\n{code}"},
+	}
+	got := string(render.Issue(iss, jiraURL))
+	if fields := strings.Count(got, "\n- "); fields != strings.Count(minimalHeader, "\n- ") {
+		t.Errorf("%d lines start with \"- \":\n%s", fields, got)
+	}
+}
+
 func TestIssueSystemFields(t *testing.T) {
 	iss := minimalIssue("INFRA-7")
 	iss.Summary = "two\r\nlines"
