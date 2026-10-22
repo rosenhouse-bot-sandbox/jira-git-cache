@@ -71,7 +71,7 @@ type SearchPage struct {
 
 // ParseTime parses a timestamp in TimeLayout.
 func ParseTime(s string) (time.Time, error) {
-	t, err := time.Parse(TimeLayout, s)
+	t, err := time.ParseInLocation(TimeLayout, s, time.UTC)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("parse Jira time: %w", err)
 	}

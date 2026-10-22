@@ -3,6 +3,7 @@ package jira_test
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -23,6 +24,27 @@ func TestParseTimeKeepsInstantAndMilliseconds(t *testing.T) {
 		if !got.Equal(want) {
 			t.Errorf("ParseTime(%q) = %v, want %v", s, got, want)
 		}
+	}
+}
+
+func TestParseTimeIgnoresLocalZone(t *testing.T) {
+	local := time.Local
+	time.Local = time.FixedZone("CEST", 2*3600)
+	t.Cleanup(func() { time.Local = local })
+
+	got, err := jira.ParseTime("2026-10-20T11:15:40.123+0200")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name, offset := got.Zone(); name != "" || offset != 2*3600 {
+		t.Errorf("Zone = %q %d, want \"\" 7200", name, offset)
+	}
+	got, err = jira.ParseTime("2026-10-20T09:15:40.123+0000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Location() != time.UTC {
+		t.Errorf("Location = %v, want UTC", got.Location())
 	}
 }
 
@@ -81,10 +103,27 @@ func TestServerInfoJSON(t *testing.T) {
 	var info jira.ServerInfo
 	decode(t, `{"baseUrl":"https://jira.example.com","version":"10.3.4","versionNumbers":[10,3,4],
 		"deploymentType":"Server","buildNumber":10030004,"serverTitle":"Jira"}`, &info)
-	if info.BaseURL != "https://jira.example.com" || info.Version != "10.3.4" ||
-		info.DeploymentType != "Server" || info.ServerTitle != "Jira" ||
-		len(info.VersionNumbers) != 3 || info.VersionNumbers[0] != 10 || info.VersionNumbers[2] != 4 {
-		t.Errorf("ServerInfo = %+v", info)
+	want := jira.ServerInfo{BaseURL: "https://jira.example.com", Version: "10.3.4", VersionNumbers: []int{10, 3, 4},
+		DeploymentType: "Server", ServerTitle: "Jira"}
+	if !reflect.DeepEqual(info, want) {
+		t.Errorf("ServerInfo = %+v, want %+v", info, want)
+	}
+}
+
+func TestJSONKeys(t *testing.T) {
+	for _, tc := range []struct {
+		v    any
+		want string
+	}{
+		{jira.ServerInfo{}, `{"baseUrl":"","version":"","versionNumbers":null,"deploymentType":"","serverTitle":""}`},
+		{jira.Field{}, `{"id":"","name":"","custom":false,"schema":{"type":""}}`},
+		{jira.SearchPage{Issues: []jira.Issue{{}}},
+			`{"startAt":0,"maxResults":0,"total":0,"issues":[{"id":"","key":"","fields":null}]}`},
+		{jira.Comment{}, `{"id":"","author":null,"body":"","created":"","updated":""}`},
+	} {
+		if got := encode(t, tc.v); got != tc.want {
+			t.Errorf("Marshal(%T) = %s, want %s", tc.v, got, tc.want)
+		}
 	}
 }
 
@@ -136,6 +175,9 @@ func TestCommentJSON(t *testing.T) {
 		 "body":"line1\r\nline2","created":"2026-10-19T17:30:02.000+0000","updated":"2026-10-20T09:00:00.000+0200"},
 		{"id":"30002","body":"anon","created":"c","updated":"u"}
 	]`, &comments)
+	if len(comments) != 2 {
+		t.Fatalf("len(comments) = %d, want 2", len(comments))
+	}
 	c := comments[0]
 	if c.ID != "30001" || c.Body != "line1\r\nline2" ||
 		c.Created != "2026-10-19T17:30:02.000+0000" || c.Updated != "2026-10-20T09:00:00.000+0200" {
