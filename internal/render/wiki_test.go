@@ -49,7 +49,8 @@ func TestWikiToMarkdown(t *testing.T) {
 		{"bold closing after space", "x *a * b", "x *a * b\n"},
 
 		{"monospace", "{{x*y*}} *z*", "`x*y*` **z**\n"},
-		{"inline code", "run {code}k *x*{code} now", "run `k *x*` now\n"},
+		{"two code spans", "{{a}} and {{b}} *c*", "`a` and `b` **c**\n"},
+		{"inline code","run {code}k *x*{code} now", "run `k *x*` now\n"},
 		{"inline code with params", "{code:go}x{code}", "`x`\n"},
 		{"inline noformat", "{noformat}*n*{noformat}", "`*n*`\n"},
 
