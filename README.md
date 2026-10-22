@@ -317,6 +317,7 @@ gh run view <run-id> --log-failed
 | Connection timeout to Jira | The runner can't reach Jira. Check its network. |
 | `429` after retries | Jira rate-limits the service account. Lower `concurrency`. |
 | Push rejected | The ruleset on `dev/jira-cache` doesn't let GitHub Actions bypass it, or the branch changed during the run; run again. |
+| `… has no _meta/snapshot.json, so it is not a cache` | `cache_branch` names a branch the tool didn't create. Pick an unused name in `.jira-git-cache/config.yml`. |
 | Job exceeded its time limit | A full refresh outgrew `timeout-minutes`. Raise it. |
 | Runs stay queued | No runner matches `runs-on`, or the runner group excludes this repo. |
 | No runs at all | The workflow isn't on the default branch. |

@@ -62,11 +62,14 @@ func (e *NewerSchemaError) Error() string {
 	return fmt.Sprintf("snapshot schema_version %d is newer than this jira-git-cache supports (%d)", e.Got, e.Supported)
 }
 
+// ErrNotSnapshot means the files have no _meta/snapshot.json.
+var ErrNotSnapshot = errors.New("not a jira-git-cache snapshot")
+
 // Decode reads the branch's files. It ignores paths that are not snapshot files.
 func Decode(files map[string][]byte) (Snapshot, error) {
 	raw, ok := files[metaPath]
 	if !ok {
-		return Snapshot{}, errors.New("not a jira-git-cache snapshot")
+		return Snapshot{}, ErrNotSnapshot
 	}
 	meta, err := decodeMeta(raw)
 	if err != nil {

@@ -74,15 +74,33 @@ func TestSyncCreatesMissingBranch(t *testing.T) {
 func TestSyncReplacesUnreadableSnapshot(t *testing.T) {
 	t.Parallel()
 	f := newSetUpFixture(t)
-	gittest.Seed(t, f.remote, "dev/jira-cache", map[string][]byte{"junk": []byte("x")})
+	gittest.Seed(t, f.remote, "dev/jira-cache", map[string][]byte{"_meta/snapshot.json": []byte("x")})
 
 	r := f.run(t, "sync")
 
-	if r.code != 0 || r.stderr != "warning: previous snapshot unreadable (not a jira-git-cache snapshot); fetching everything\n" {
+	if r.code != 0 || !strings.HasPrefix(r.stderr, "warning: previous snapshot unreadable (") {
 		t.Errorf("%+v", r)
 	}
 	if got := gittest.Run(t, f.remote, "ls-tree", "-r", "--name-only", "dev/jira-cache"); got != "PLAT/PLAT-1.json\nPLAT/PLAT-2.json\n_meta/fields.json\n_meta/snapshot.json" {
 		t.Errorf("branch files:\n%s", got)
+	}
+}
+
+func TestSyncAndPreviewRefuseBranchThatIsNotACache(t *testing.T) {
+	t.Parallel()
+	for _, args := range [][]string{{"sync"}, {"preview", t.TempDir()}} {
+		f := newSetUpFixture(t)
+		gittest.Seed(t, f.remote, "dev/jira-cache", map[string][]byte{"README": []byte("x")})
+		tip := f.branchTip(t)
+
+		r := f.run(t, args...)
+
+		if r.code != 1 || r.stderr != "✗ dev/jira-cache on origin has no _meta/snapshot.json, so it is not a cache; refusing to replace it. Set cache_branch to an unused branch, or delete this one\n" {
+			t.Errorf("%v: %+v", args, r)
+		}
+		if got := f.branchTip(t); got != tip {
+			t.Errorf("%v: branch moved from %s to %s", args, tip, got)
+		}
 	}
 }
 
