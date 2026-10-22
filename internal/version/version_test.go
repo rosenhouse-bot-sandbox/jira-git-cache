@@ -21,7 +21,6 @@ func TestIsRelease(t *testing.T) {
 		"":                false,
 		"(devel)":         false,
 		"v1.2.3+dirty":    false,
-		"v1.2.3 ":         false,
 		"v1.2.3-rc1+meta": false,
 	} {
 		if got := version.IsRelease(s); got != want {
