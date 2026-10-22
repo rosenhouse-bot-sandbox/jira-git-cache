@@ -156,16 +156,7 @@ func writeTree(dir string, tree map[string][]byte) error {
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("preview: %w", err)
 	}
-	for name, data := range tree {
-		path := filepath.Join(dir, filepath.FromSlash(name))
-		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-			return fmt.Errorf("preview: %w", err)
-		}
-		if err := os.WriteFile(path, data, 0o600); err != nil {
-			return fmt.Errorf("preview: %w", err)
-		}
-	}
-	return nil
+	return pull.WriteTree(dir, tree)
 }
 
 func (e Env) pull(ctx context.Context, args []string) error {

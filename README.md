@@ -207,7 +207,7 @@ $ echo $?
 - It renders `issue.md`, `_index.md`, and `issue.json` from the branch's JSON. `issue.json` uses your version's schema. Rendering ships with `jira-git-cache`, so a new release can change the view without a Jira refetch.
 - It reads every older `schema_version`. It refuses a newer one and tells you to upgrade.
 - It warns when the snapshot's `tool_version` is newer than yours, because your view may differ from other readers'.
-- It works from any directory in the clone.
+- It works from any directory in the clone except the directories it replaces, such as `.jira-git-cache/PLAT/`.
 - It refuses to run unless `.jira-git-cache/.gitignore` ignores everything it writes.
 - It renders into a temporary directory, then moves each project directory and `_meta/` into place. Readers never see a half-written project. Concurrent pulls wait for each other.
 - Local edits outside `config.yml` and `.gitignore` are lost on the next `pull`.

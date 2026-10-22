@@ -2,6 +2,8 @@ package pull_test
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -170,6 +172,146 @@ func TestPullRendersSnapshotFromSubdirectory(t *testing.T) {
 	if got := f.stderr.String(); got != "" {
 		t.Errorf("stderr: %q", got)
 	}
+}
+
+func TestPullRefusesToRunInsideADirectoryItReplaces(t *testing.T) {
+	for _, dir := range []string{"PLAT", "PLAT/PLAT-1", "_meta"} {
+		t.Run(dir, func(t *testing.T) {
+			f := newFixture(t, defaultMain())
+			s := synced(&fetchedAt, map[string]int{"PLAT": 1}, "PLAT-1")
+			f.seed(t, s)
+			f.mustRun(t)
+			f.opts.Dir = filepath.Join(f.dir, ".jira-git-cache", dir)
+
+			err := f.run(t)
+
+			want := "pull replaces .jira-git-cache/" + strings.Split(dir, "/")[0] + "; run it from outside that directory"
+			if err == nil || err.Error() != want {
+				t.Errorf("got %v, want %s", err, want)
+			}
+			if _, err := os.Stat(f.opts.Dir); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+}
+
+func TestPullRefusesToRunInsideALinkToADirectoryItReplaces(t *testing.T) {
+	f := newFixture(t, defaultMain())
+	f.seed(t, synced(&fetchedAt, map[string]int{"PLAT": 1}, "PLAT-1"))
+	f.mustRun(t)
+	f.opts.Dir = filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(filepath.Join(f.dir, ".jira-git-cache", "PLAT"), f.opts.Dir); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.run(t); err == nil || !strings.HasPrefix(err.Error(), "pull replaces ") {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestPullRunsInsideCacheDirectory(t *testing.T) {
+	f := newFixture(t, defaultMain())
+	f.seed(t, synced(&fetchedAt, map[string]int{"PLAT": 1}, "PLAT-1"))
+	f.write(t, ".jira-git-cache/notes/x", "")
+	for _, dir := range []string{".jira-git-cache", ".jira-git-cache/notes"} {
+		f.opts.Dir = filepath.Join(f.dir, dir)
+		f.mustRun(t)
+	}
+}
+
+func TestPullNeverShowsAHalfWrittenProject(t *testing.T) {
+	f := newFixture(t, defaultMain())
+	var keys []string
+	for i := range 500 {
+		keys = append(keys, fmt.Sprint("PLAT-", i+1))
+	}
+	f.seed(t, synced(&fetchedAt, map[string]int{"PLAT": len(keys)}, keys...))
+	project := filepath.Join(f.dir, ".jira-git-cache", "PLAT")
+	stop, missing := make(chan struct{}), make(chan string, 1)
+	go func() {
+		defer close(missing)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if key := missingIssue(project); key != "" {
+				missing <- key
+				return
+			}
+		}
+	}()
+
+	f.mustRun(t)
+	close(stop)
+
+	if key := <-missing; key != "" {
+		t.Errorf("PLAT/_index.md listed %s before its issue.md existed", key)
+	}
+}
+
+// missingIssue returns a key that dir/_index.md lists without its issue.md.
+// It holds dir open, so a rename of dir does not change what it sees.
+func missingIssue(dir string) string {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = root.Close() }()
+	index, err := root.Open("_index.md")
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = index.Close() }()
+	data, err := io.ReadAll(index)
+	if err != nil {
+		return ""
+	}
+	for line := range strings.Lines(string(data)) {
+		key, _, _ := strings.Cut(line, " | ")
+		if _, err := root.Stat(key + "/issue.md"); err != nil {
+			return key
+		}
+	}
+	return ""
+}
+
+func TestPullWritesReadableFiles(t *testing.T) {
+	f := newFixture(t, defaultMain())
+	f.seed(t, synced(&fetchedAt, map[string]int{"PLAT": 1}, "PLAT-1"))
+	f.mustRun(t)
+
+	ref := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ref, "dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ref, "file"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{
+		"_meta":                  "dir",
+		"PLAT":                   "dir",
+		"PLAT/PLAT-1":            "dir",
+		"_meta/snapshot.json":    "file",
+		"PLAT/_index.md":         "file",
+		"PLAT/PLAT-1/issue.md":   "file",
+		"PLAT/PLAT-1/issue.json": "file",
+	} {
+		if got, want := mode(t, filepath.Join(f.dir, ".jira-git-cache", path)), mode(t, filepath.Join(ref, want)); got != want {
+			t.Errorf("%s: mode %v, want %v", path, got, want)
+		}
+	}
+}
+
+func mode(t *testing.T, path string) os.FileMode {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Mode()
 }
 
 func TestPullFindsConfigInRepoSubdirectory(t *testing.T) {

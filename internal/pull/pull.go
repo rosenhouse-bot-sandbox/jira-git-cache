@@ -94,6 +94,9 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("pull: %w", err)
 	}
 	c := cache{repo: repo, dir: filepath.Join(root, config.Dir), git: path.Join(filepath.ToSlash(rel), config.Dir)}
+	if err := c.requireOutsideReplaced(opts.Dir); err != nil {
+		return err
+	}
 
 	probes := []string{".lock", ".tmp-check/x", "_meta/snapshot.json"}
 	for _, p := range cfg.Projects {
@@ -178,6 +181,19 @@ func (c cache) gitPaths(names []string) []string {
 	return paths
 }
 
+// requireOutsideReplaced refuses a dir that install would move away.
+func (c cache) requireOutsideReplaced(dir string) error {
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	rel, _ := filepath.Rel(c.dir, dir)
+	top, _, _ := strings.Cut(filepath.ToSlash(rel), "/")
+	if top == "_meta" || projectKey.MatchString(top) {
+		return fmt.Errorf("pull replaces %s/%s; run it from outside that directory", c.git, top)
+	}
+	return nil
+}
+
 func (c cache) requireIgnored(ctx context.Context, names []string) error {
 	notIgnored, err := c.repo.NotIgnored(ctx, c.gitPaths(names))
 	if err != nil {
@@ -197,13 +213,13 @@ func (c cache) install(ctx context.Context, tree map[string][]byte) error {
 		return fmt.Errorf("pull: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
+	if err := WriteTree(filepath.Join(tmp, "new"), tree); err != nil {
+		return err
+	}
 	rendered := map[string]bool{}
-	for name, data := range tree {
+	for name := range tree {
 		top, _, _ := strings.Cut(name, "/")
 		rendered[top] = true
-		if err := writeFile(filepath.Join(tmp, "new", filepath.FromSlash(name)), data); err != nil {
-			return err
-		}
 	}
 	if err := os.Mkdir(filepath.Join(tmp, "old"), 0o750); err != nil {
 		return fmt.Errorf("pull: %w", err)
@@ -219,12 +235,16 @@ func (c cache) install(ctx context.Context, tree map[string][]byte) error {
 	return c.removeLeftovers(ctx, rendered)
 }
 
-func writeFile(name string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(name), 0o750); err != nil {
-		return fmt.Errorf("pull: %w", err)
-	}
-	if err := os.WriteFile(name, data, 0o600); err != nil {
-		return fmt.Errorf("pull: %w", err)
+// WriteTree writes tree's files under dir, readable by everyone the umask allows.
+func WriteTree(dir string, tree map[string][]byte) error {
+	for name, data := range tree {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil { //nolint:gosec // Others sharing the checkout read the cache.
+			return fmt.Errorf("write tree: %w", err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil { //nolint:gosec // Others sharing the checkout read the cache.
+			return fmt.Errorf("write tree: %w", err)
+		}
 	}
 	return nil
 }
