@@ -15,13 +15,13 @@ import (
 	"time"
 )
 
-// Identity of snapshot commits.
+// BotName and BotEmail identify the author and committer of snapshot commits.
 const (
 	BotName  = "github-actions[bot]"
 	BotEmail = "41898282+github-actions[bot]@users.noreply.github.com"
 )
 
-// Errors returned by Repo methods.
+// Repo methods return these errors.
 var (
 	ErrBranchNotFound = errors.New("branch not found on remote")
 	ErrRemoteMoved    = errors.New("the cache branch changed on the remote during this run; run again")
@@ -36,7 +36,11 @@ type Error struct {
 
 // Error names the command, its exit status and its stderr.
 func (e *Error) Error() string {
-	return fmt.Sprintf("git %s: %v: %s", strings.Join(e.Args, " "), e.Err, strings.TrimSpace(e.Stderr))
+	msg := fmt.Sprintf("git %s: %v", strings.Join(e.Args, " "), e.Err)
+	if stderr := strings.TrimSpace(e.Stderr); stderr != "" {
+		msg += ": " + stderr
+	}
+	return msg
 }
 
 // Unwrap returns the exec error.
@@ -89,10 +93,11 @@ func (r *Repo) FetchFiles(ctx context.Context, remote, branch, ref string) (comm
 	s := &session{ctx: ctx, r: r}
 	objects := s.git("", "rev-list", "--objects", "--missing=print", ref)
 	commit, _, _ = strings.Cut(objects, "\n")
-	// A partial clone would otherwise fetch each missing blob in its own request.
-	if missing := missingObjects(objects); missing != "" {
+	// A partial clone would otherwise fetch each missing object in its own request.
+	for missing := missingObjects(objects); missing != ""; missing = missingObjects(objects) {
 		s.git(missing, "-c", "fetch.negotiationAlgorithm=noop",
-			"fetch", remote, "--no-tags", "--no-write-fetch-head", "--filter=blob:none", "--stdin")
+			"fetch", remote, "--no-write-fetch-head", "--filter=blob:none", "--stdin")
+		objects = s.git("", "rev-list", "--objects", "--missing=print", commit)
 	}
 	paths, ids := regularFiles(s.git("", "ls-tree", "-r", "-z", commit))
 	batch := s.git(ids, "cat-file", "--batch")
@@ -179,16 +184,24 @@ func (r *Repo) Publish(ctx context.Context, remote, branch, expect string, files
 	tree := strings.TrimSpace(s.git("", "write-tree"))
 	commit = strings.TrimSpace(s.git("", "commit-tree", tree, "-m", message))
 	target := "refs/heads/" + branch
+	s.env = nil
 	s.git("", "push", "--force-with-lease="+target+":"+expect, remote, commit+":"+target)
 
 	var gitErr *Error
-	if errors.As(s.err, &gitErr) && strings.Contains(gitErr.Stderr, "(stale info)") {
+	if errors.As(s.err, &gitErr) && leaseFailed(gitErr.Stderr) {
 		return "", ErrRemoteMoved
 	}
 	if s.err != nil {
 		return "", s.err
 	}
 	return commit, nil
+}
+
+// leaseFailed reports whether a push failed because the remote ref was not at
+// the expected commit. The client reports "stale info" before it sends. The
+// server reports "but expected" when the ref moves during the push.
+func leaseFailed(stderr string) bool {
+	return strings.Contains(stderr, "(stale info)") || strings.Contains(stderr, " but expected ")
 }
 
 // NotIgnored returns the paths that git does not ignore. Tracked paths are

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -86,6 +87,37 @@ func TestOpenOutsideRepoFails(t *testing.T) {
 	}
 }
 
+func TestGitRunsWithCLocaleAndNoPrompt(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	log := filepath.Join(bin, "log")
+	stub := fmt.Sprintf("#!/bin/sh\necho \"$LC_ALL $GIT_TERMINAL_PROMPT\" >> %q\nexec %q \"$@\"\n", log, git)
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	clone := gittest.Clone(t, gittest.Remote(t))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("LC_ALL", "de_DE.UTF-8")
+	t.Setenv("GIT_TERMINAL_PROMPT", "1")
+
+	open(t, clone)
+	if got, err := os.ReadFile(log); err != nil || string(got) != "C 0\n" {
+		t.Errorf("git env = %q, %v; want %q", got, err, "C 0\n")
+	}
+}
+
+func TestErrorWithoutStderrHasNoTrailingSeparator(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := gitstore.Open(ctx, t.TempDir())
+	if err == nil || strings.HasSuffix(err.Error(), ": ") {
+		t.Errorf("err = %q", err)
+	}
+}
+
 func TestDefaultBranch(t *testing.T) {
 	remote := gittest.Remote(t)
 	gittest.Seed(t, remote, "trunk", nil)
@@ -123,11 +155,13 @@ func TestRemoteHasBranch(t *testing.T) {
 	remote := gittest.Remote(t)
 	gittest.Seed(t, remote, "dev/jira-cache", nil)
 	gittest.Seed(t, remote, "x/dev/jira-cache-old", nil)
+	gittest.Run(t, remote, "update-ref", "refs/other/refs/heads/elsewhere", "main")
 	repo := open(t, gittest.Clone(t, remote))
 	for branch, want := range map[string]bool{
 		"dev/jira-cache": true,
 		"jira-cache":     false,
 		"dev/jira":       false,
+		"elsewhere":      false,
 		"missing":        false,
 	} {
 		got, err := repo.RemoteHasBranch(context.Background(), "origin", branch)
@@ -177,13 +211,34 @@ func TestPublishThenFetchRoundTrips(t *testing.T) {
 	}
 }
 
+func TestPublishIgnoresContentFilters(t *testing.T) {
+	remote := gittest.Remote(t)
+	clone := gittest.Clone(t, remote)
+	gittest.Run(t, clone, "config", "core.autocrlf", "true")
+	files := map[string][]byte{"a.md": []byte("line\r\nline\r\n")}
+	publish(t, open(t, clone), "cache", "", files)
+
+	if _, got := fetch(t, open(t, gittest.Clone(t, remote)), "cache"); !reflect.DeepEqual(got, files) {
+		t.Errorf("files = %q, want %q", got, files)
+	}
+}
+
+func TestPublishRunsPrePushHookOutsideSnapshotSession(t *testing.T) {
+	clone := gittest.Clone(t, gittest.Remote(t))
+	hook := "#!/bin/sh\n[ -z \"$GIT_INDEX_FILE\" ] && [ \"$GIT_AUTHOR_NAME\" != \"" + gitstore.BotName + "\" ]\n"
+	if err := os.WriteFile(filepath.Join(clone, ".git", "hooks", "pre-push"), []byte(hook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	publish(t, open(t, clone), "cache", "", map[string][]byte{"a": []byte("a")})
+}
+
 func TestPublishWritesParentlessBotCommit(t *testing.T) {
 	remote := gittest.Remote(t)
 	writer := open(t, gittest.Clone(t, remote))
 	commit := publish(t, writer, "cache", "", map[string][]byte{"a": []byte("a")})
 
-	got := gittest.Run(t, remote, "log", "-1", "--format=%P|%an|%ae|%at|%cn|%ce|%ct|%B", commit)
-	want := fmt.Sprintf("|%s|%s|%d|%s|%s|%d|msg", gitstore.BotName, gitstore.BotEmail, when.Unix(),
+	got := gittest.Run(t, remote, "log", "-1", "--date=raw", "--format=%P|%an|%ae|%ad|%cn|%ce|%cd|%B", commit)
+	want := fmt.Sprintf("|%s|%s|%d +0000|%s|%s|%d +0000|msg", gitstore.BotName, gitstore.BotEmail, when.Unix(),
 		gitstore.BotName, gitstore.BotEmail, when.Unix())
 	if got != want {
 		t.Errorf("commit = %q, want %q", got, want)
@@ -248,6 +303,22 @@ func TestPublishFailsWhenRemoteMoved(t *testing.T) {
 	}
 	if got := gittest.Run(t, remote, "rev-parse", "refs/heads/cache"); got != concurrent {
 		t.Errorf("remote branch = %s, want %s", got, concurrent)
+	}
+}
+
+func TestPublishFailsWhenRemoteMovesDuringPush(t *testing.T) {
+	remote := gittest.Remote(t)
+	writer := open(t, gittest.Clone(t, remote))
+	first := publish(t, writer, "cache", "", map[string][]byte{"a": []byte("1")})
+	main := gittest.Run(t, remote, "rev-parse", "main")
+	hook := "#!/bin/sh\nenv -u GIT_QUARANTINE_PATH git update-ref refs/heads/cache " + main + "\n"
+	if err := os.WriteFile(filepath.Join(remote, "hooks", "pre-receive"), []byte(hook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := writer.Publish(context.Background(), "origin", "cache", first, map[string][]byte{"b": []byte("2")}, "msg", when)
+	if !errors.Is(err, gitstore.ErrRemoteMoved) {
+		t.Fatalf("err = %v, want ErrRemoteMoved", err)
 	}
 }
 
@@ -333,6 +404,18 @@ func TestFetchMissingBranch(t *testing.T) {
 	_, _, err := repo.FetchFiles(context.Background(), "origin", "dev/jira-cache", previous)
 	if !errors.Is(err, gitstore.ErrBranchNotFound) {
 		t.Fatalf("err = %v, want ErrBranchNotFound", err)
+	}
+}
+
+func TestFetchLeavesRemoteTagsOut(t *testing.T) {
+	remote := gittest.Remote(t)
+	commit := gittest.Seed(t, remote, "cache", nil)
+	repo := open(t, gittest.Clone(t, remote))
+	gittest.Run(t, remote, "tag", "v1", commit)
+
+	fetch(t, repo, "cache")
+	if got := gittest.Run(t, repo.Dir, "tag", "--list"); got != "" {
+		t.Errorf("tags = %q, want none", got)
 	}
 }
 
@@ -459,6 +542,26 @@ func TestFetchFromBloblessCloneBatchesMissingBlobs(t *testing.T) {
 	}
 	if n := countFetches(t, trace); n != 2 {
 		t.Errorf("ran %d fetches, want 2", n)
+	}
+	if head := gittest.Run(t, repo.Dir, "rev-parse", "FETCH_HEAD"); head != commit {
+		t.Errorf("FETCH_HEAD = %s, want %s", head, commit)
+	}
+}
+
+func TestFetchFromTreelessCloneBatchesMissingObjects(t *testing.T) {
+	remote := gittest.Remote(t)
+	files := manyFiles(10)
+	commit := gittest.Seed(t, remote, "cache", files)
+	repo := open(t, gittest.Clone(t, remote, "--filter=tree:0"))
+	trace := filepath.Join(t.TempDir(), "trace")
+	t.Setenv("GIT_TRACE2_EVENT", trace)
+
+	gotCommit, got := fetch(t, repo, "cache")
+	if gotCommit != commit || !reflect.DeepEqual(got, files) {
+		t.Errorf("fetched %s %q, want %s %q", gotCommit, got, commit, files)
+	}
+	if n := countFetches(t, trace); n != 3 {
+		t.Errorf("ran %d fetches, want 3", n)
 	}
 }
 
