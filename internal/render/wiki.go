@@ -3,20 +3,19 @@ package render
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 )
 
 var (
-	blockTag  = regexp.MustCompile(`^\{(code|noformat)(?::([^}]*))?\}$`)
-	heading   = regexp.MustCompile(`^h([1-6])\. (.*)$`)
-	listItem  = regexp.MustCompile(`^([*#-]+) (.*)$`)
-	codeSpan  = regexp.MustCompile(`\{\{(.+?)\}\}|\{code(?::[^}]*)?\}(.*?)\{code\}|\{noformat\}(.*?)\{noformat\}`)
-	namedLink = regexp.MustCompile(`\[([^\]|]+)\|([^\]]+)\]`)
-	bareLink  = regexp.MustCompile(`\[(https?://[^\]|]+)\]`)
-	mention   = regexp.MustCompile(`\[~([^\]]+)\]`)
-	boldSpan  = regexp.MustCompile(`\*[^*\s](?:[^*]*[^*\s])?\*`)
+	blockTag = regexp.MustCompile(`^\{(code|noformat)(?::([^}]*))?\}$`)
+	heading  = regexp.MustCompile(`^h([1-6])\. (.*)$`)
+	listItem = regexp.MustCompile(`^([*#-]+) (.*)$`)
+	codeSpan = regexp.MustCompile(`\{\{(.+?)\}\}|\{code(?::[^}]*)?\}(.*?)\{code\}|\{noformat\}(.*?)\{noformat\}`)
+	link     = regexp.MustCompile(`\[~([^\]|]+)\]|\[([^\]|]+)\|([^\]|]+)(?:\|[^\]]*)?\]|\[(https?://[^\]|]+)\]`)
+	boldSpan = regexp.MustCompile(`\*[^*\s](?:[^*]*[^*\s])?\*`)
 )
 
 // WikiToMarkdown converts Jira wiki markup to Markdown, line by line.
@@ -27,34 +26,48 @@ func WikiToMarkdown(wiki string) string {
 	for line := range strings.Lines(strings.ReplaceAll(wiki, "\r\n", "\n")) {
 		lines = append(lines, strings.TrimSuffix(line, "\n"))
 	}
+	raw := strings.Join(lines, "\n") + "\n"
 	var out strings.Builder
-	fence, quoted := "", false
-	for _, line := range lines {
-		tag := strings.TrimSpace(line)
-		if fence == "" && tag == "{quote}" {
+	quoted := false
+	for i := 0; i < len(lines); i++ {
+		tag := strings.TrimSpace(lines[i])
+		if tag == "{quote}" {
 			quoted = !quoted
 			out.WriteString("\n")
 			continue
 		}
-		md := line
-		if fence != "" {
-			if tag == fence {
-				fence, md = "", "```"
+		block := []string{convertLine(lines[i])}
+		if m := blockTag.FindStringSubmatch(tag); m != nil {
+			body := lines[i+1:]
+			n := slices.IndexFunc(body, func(l string) bool { return strings.TrimSpace(l) == "{"+m[1]+"}" })
+			if n < 0 {
+				return raw
 			}
-		} else if m := blockTag.FindStringSubmatch(tag); m != nil {
-			fence, md = "{"+m[1]+"}", "```"+language(m[2])
-		} else {
-			md = convertLine(line)
+			body = body[:n]
+			f := fence(strings.Join(body, "\n"), 3)
+			block = slices.Concat([]string{f + language(m[2])}, body, []string{f})
+			i += n + 1
 		}
-		if quoted {
-			md = "> " + md
+		for _, md := range block {
+			if quoted {
+				md = "> " + md
+			}
+			out.WriteString(md + "\n")
 		}
-		out.WriteString(md + "\n")
 	}
-	if fence != "" || quoted {
-		return strings.Join(lines, "\n") + "\n"
+	if quoted {
+		return raw
 	}
 	return out.String()
+}
+
+// fence returns the shortest backtick run, at least minLen long, that s does not contain.
+func fence(s string, minLen int) string {
+	f := strings.Repeat("`", minLen)
+	for strings.Contains(s, f) {
+		f += "`"
+	}
+	return f
 }
 
 func language(params string) string {
@@ -68,7 +81,7 @@ func language(params string) string {
 
 func convertLine(s string) string {
 	if strings.TrimSpace(s) == "----" {
-		return "---"
+		return "***"
 	}
 	if m := heading.FindStringSubmatch(s); m != nil {
 		level := int(m[1][0]-'0') + 2
@@ -92,16 +105,32 @@ func inline(s string) string {
 	texts := codeSpan.Split(s, -1)
 	out := text(texts[0])
 	for i, m := range codeSpan.FindAllStringSubmatch(s, -1) {
-		out += "`" + m[1] + m[2] + m[3] + "`" + text(texts[i+1])
+		out += codeSpanOf(m[1]+m[2]+m[3]) + text(texts[i+1])
 	}
 	return out
 }
 
+func codeSpanOf(s string) string {
+	f := fence(s, 1)
+	if strings.HasPrefix(s, "`") || strings.HasSuffix(s, "`") {
+		s = " " + s + " "
+	}
+	return f + s + f
+}
+
 func text(s string) string {
-	s = namedLink.ReplaceAllString(s, "[$1]($2)")
-	s = bareLink.ReplaceAllString(s, "<$1>")
-	s = mention.ReplaceAllString(s, "@$1")
-	return bold(s)
+	return bold(link.ReplaceAllStringFunc(s, convertLink))
+}
+
+func convertLink(l string) string {
+	m := link.FindStringSubmatch(l)
+	if m[1] != "" {
+		return "@" + m[1]
+	}
+	if m[4] != "" {
+		return "<" + m[4] + ">"
+	}
+	return "[" + m[2] + "](" + m[3] + ")"
 }
 
 // bold doubles the stars of *x* when they sit at a word's start and end.

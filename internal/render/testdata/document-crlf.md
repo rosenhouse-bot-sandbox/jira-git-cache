@@ -21,5 +21,5 @@ echo *not bold*
 
 ||Env||Leaks||
 |staging|yes|
----
+***
 Related: <https://jira.example.com/browse/PLAT-100>

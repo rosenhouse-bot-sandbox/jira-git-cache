@@ -107,7 +107,11 @@ func field(label, value string) string {
 }
 
 func markdown(wiki string) string {
-	return strings.Trim(WikiToMarkdown(wiki), "\n")
+	lines := strings.Split(strings.TrimRightFunc(WikiToMarkdown(wiki), unicode.IsSpace), "\n")
+	for len(lines) > 0 && strings.TrimSpace(lines[0]) == "" {
+		lines = lines[1:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func deref(s *string, none string) string {
@@ -158,8 +162,6 @@ func customValue(v any) string {
 		return v
 	case float64:
 		return strconv.FormatFloat(v, 'f', -1, 64)
-	case bool:
-		return strconv.FormatBool(v)
 	case []any:
 		parts := make([]string, len(v))
 		for i, e := range v {

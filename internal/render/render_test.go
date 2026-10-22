@@ -84,7 +84,7 @@ func TestIssueMinimal(t *testing.T) {
 }
 
 func TestIssueOmitsBlankDescription(t *testing.T) {
-	for i, d := range []*string{nil, ptr(""), ptr("\r\n\n")} {
+	for i, d := range []*string{nil, ptr(""), ptr("\r\n\n"), ptr(" \n\t ")} {
 		iss := minimalIssue("INFRA-7")
 		iss.Description = d
 		if got := string(render.Issue(iss, jiraURL)); got != minimalHeader {
@@ -95,7 +95,7 @@ func TestIssueOmitsBlankDescription(t *testing.T) {
 
 func TestIssueTrimsBlankLinesAroundSections(t *testing.T) {
 	iss := minimalIssue("INFRA-7")
-	iss.Description = ptr("\n\nfirst\n\nlast\n\n")
+	iss.Description = ptr(" \n\t\nfirst\n\nlast  \n \n")
 	iss.Comments = []snapshot.Comment{{ID: "1", Created: "2026-10-19T17:30:02.000Z", Body: "\nc\n\n"}}
 	want := minimalHeader + "\n## Description\n\nfirst\n\nlast\n\n## Comments\n\n### Anonymous — 2026-10-19T17:30:02Z\n\nc\n"
 	if got := string(render.Issue(iss, jiraURL)); got != want {
@@ -107,7 +107,7 @@ func TestIssueComments(t *testing.T) {
 	iss := minimalIssue("INFRA-7")
 	iss.Comments = []snapshot.Comment{
 		{ID: "1", Author: &snapshot.User{Name: "bob"}, Created: "2026-10-19T17:30:02.500Z", Body: "*hi*"},
-		{ID: "2", Author: &snapshot.User{Name: "jdoe", DisplayName: "Jane\nDoe"}, Created: "bad time", Body: ""},
+		{ID: "2", Author: &snapshot.User{Name: "jdoe", DisplayName: "Jane\nDoe"}, Created: "bad time", Body: " \n "},
 		{ID: "3", Created: "2026-10-20T08:00:00.000Z", Body: "x"},
 	}
 	want := minimalHeader + `
@@ -160,7 +160,7 @@ func TestIssueCustomFields(t *testing.T) {
 		"story_points": 0.5,
 		"big":          1e21,
 		"flag":         false,
-		"list":         []any{"x", 2.0, []any{"y", true}},
+		"list":         []any{"x", 2.0, []any{"y", true}, map[string]any{"a": 1.0}, "z"},
 		"empty_list":   []any{},
 		"object":       map[string]any{"b": "<1>", "a": 1.0},
 		"unset":        nil,
@@ -169,7 +169,7 @@ func TestIssueCustomFields(t *testing.T) {
 	want := minimalHeader + `- Big: 1000000000000000000000
 - Empty List:
 - Flag: false
-- List: x, 2, y, true
+- List: x, 2, y, true, {"a":1}, z
 - Object: {"a":1,"b":"<1>"}
 - Story Points: 0.5
 - Text: a b c
@@ -215,6 +215,7 @@ func TestTree(t *testing.T) {
 				"PLAT":  {JQL: "q", Count: 2},
 				"EMPTY": {JQL: "q", Count: 0},
 				"../X":  {JQL: "q", Count: 0},
+				"X/..":  {JQL: "q", Count: 0},
 			},
 			SchemaVersion: snapshot.SchemaVersion,
 		},
