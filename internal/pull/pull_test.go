@@ -313,6 +313,7 @@ func TestPullRefusesBranchThatIsNotASnapshot(t *testing.T) {
 func TestPullWarnsWhenSnapshotToolIsNewer(t *testing.T) {
 	for _, tc := range []struct{ theirs, ours, warning string }{
 		{"v0.2.0", "v0.1.0", "warning: the snapshot was written by jira-git-cache v0.2.0, newer than yours (v0.1.0); your view may differ from other readers'\n"},
+		{"v0.1.0", "v0.0.0-20261022131232-d376b2d5fe4d", "warning: the snapshot was written by jira-git-cache v0.1.0, newer than yours (v0.0.0-20261022131232-d376b2d5fe4d); your view may differ from other readers'\n"},
 		{"v0.1.0", "v0.1.0", ""},
 		{"v0.1.0", "v0.2.0", ""},
 	} {
