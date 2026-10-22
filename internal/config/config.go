@@ -36,7 +36,14 @@ var (
 	fieldName  = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 	unknownKey = regexp.MustCompile(`^(line \d+: )field (\S+) not found in type \S+$`)
+
+	builtinNames = []string{"status", "resolution", "type", "priority", "assignee", "reporter",
+		"labels", "parent", "links", "created", "updated", "url"}
 )
+
+// IsBuiltinName reports whether a custom field named name would share its
+// issue.md label with a built-in field.
+func IsBuiltinName(name string) bool { return slices.Contains(builtinNames, name) }
 
 // Window selects issues updated within Days, or unresolved and updated within UnresolvedDays.
 type Window struct {
@@ -296,6 +303,8 @@ func validateFields(fields Fields) error {
 			return fmt.Errorf("fields: invalid id %q", f.ID)
 		case !fieldName.MatchString(f.Name):
 			return fmt.Errorf("fields: %s: invalid name %q", f.ID, f.Name)
+		case IsBuiltinName(f.Name):
+			return fmt.Errorf("fields: %s: name %q is taken by a built-in field", f.ID, f.Name)
 		case ids[f.ID]:
 			return fmt.Errorf("fields: duplicate id %q", f.ID)
 		case names[f.Name]:

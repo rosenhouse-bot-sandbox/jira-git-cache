@@ -502,15 +502,16 @@ func TestRunNamesChosenFields(t *testing.T) {
 		custom(10902, "team", "textfield"),
 		custom(10903, "Alpha", "textfield"),
 		custom(10904, "Équipe de développement", "textfield"),
+		custom(10905, "URL", "textfield"),
 	}
 	first := jiramock.NewIssue("PLAT-1", 10001, jiramock.DefaultNow.Add(-time.Hour))
-	for _, id := range []string{"10002", "10500", "10900", "10901", "10902", "10903", "10904", "10999"} {
+	for _, id := range []string{"10002", "10500", "10900", "10901", "10902", "10903", "10904", "10905", "10999"} {
 		first.Fields["customfield_"+id] = "x"
 	}
 	second := jiramock.NewIssue("PLAT-2", 10002, jiramock.DefaultNow)
 	second.Fields["customfield_10903"] = "y"
 	f.jira.Put(first, second)
-	f.opts.Answers.Fields = ptr("1-8")
+	f.opts.Answers.Fields = ptr("1-9")
 
 	out := f.mustRun(t)
 
@@ -523,8 +524,9 @@ func TestRunNamesChosenFields(t *testing.T) {
   5  customfield_10901  ###                          1
   6  customfield_10902  team                         1
   7  customfield_10904  Équipe de développement      1
-  8  customfield_10999                               1
-Include which fields? [2]: 1-8
+  8  customfield_10905  URL                          1
+  9  customfield_10999                               1
+Include which fields? [2]: 1-9
 `
 	if !strings.Contains(out, wantTable) {
 		t.Errorf("stdout:\n%s\nwant table:\n%s", out, wantTable)
@@ -537,6 +539,7 @@ Include which fields? [2]: 1-8
   customfield_10901: field_10901
   customfield_10902: team_10902
   customfield_10904: quipe_de_d_veloppement
+  customfield_10905: url_10905
   customfield_10999: field_10999
 `
 	if got := f.file(t, ".jira-git-cache/config.yml"); !strings.HasSuffix(got, want) {

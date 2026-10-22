@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rosenhouse-bot-sandbox/jira-git-cache/internal/config"
 	"github.com/rosenhouse-bot-sandbox/jira-git-cache/internal/jira"
 	"github.com/rosenhouse-bot-sandbox/jira-git-cache/internal/jiramock"
 	"github.com/rosenhouse-bot-sandbox/jira-git-cache/internal/render"
@@ -125,6 +126,17 @@ x
 `
 	if got := string(render.Issue(iss, jiraURL)); got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestBuiltinLabelsAreReservedFieldNames(t *testing.T) {
+	for line := range strings.Lines(minimalHeader) {
+		if label, ok := strings.CutPrefix(line, "- "); ok {
+			label, _, _ = strings.Cut(label, ":")
+			if name := strings.ToLower(label); !config.IsBuiltinName(name) {
+				t.Errorf("config accepts a custom field named %q", name)
+			}
+		}
 	}
 }
 
